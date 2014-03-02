@@ -1,0 +1,17 @@
+{application, toogie,
+ [
+  {description, "4 in line server"},
+  {vsn, "1"},
+  {registered, [c4_game_master, c4_player_master]},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  crypto,
+                  public_key,
+                  ssl,
+                  cowboy,
+                  uuid
+                      ]},
+  {mod, { toogie_app, []}},
+  {env, []}
+ ]}.

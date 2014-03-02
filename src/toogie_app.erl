@@ -1,5 +1,5 @@
 % @doc Main application and top supervisor module.
--module(c4_server).
+-module(toogie_app).
 -behavior(application).
 -behavior(supervisor).
 
