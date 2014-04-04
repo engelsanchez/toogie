@@ -26,6 +26,7 @@ websocket_init(_Any, Req, []) ->
     {ok, Req, #state{player_state=toogie_text_handler:new()}}.
 
 websocket_handle({text, Msg}, Req, State = #state{player_state=PlayerState}) ->
+    ?log("Got message ~s", [Msg]),
     case toogie_text_handler:handle(Msg, PlayerState) of
         {reply, Reply, NewPlayerState} ->
             ?log("Sending message ~s", [Reply]),

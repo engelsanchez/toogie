@@ -30,6 +30,8 @@ start(_Type, _Args) ->
     ?log("Starting cowboy listener on port 8080", []),
     cowboy:start_http(c4_http_listener, 100, [{port, 8080}],
                       [{env, [{dispatch, Dispatch}]}]),
+    {ok, _} = ranch:start_listener(tcp_reverse, 10,
+                                   ranch_tcp, [{port, 5555}], toogie_tcp_handler, []),
     Result.
 
 % @doc Starts the game server and links it to the current process.
