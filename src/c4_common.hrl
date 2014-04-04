@@ -20,7 +20,6 @@ nolog(_Format, _Args) -> ok.
 
 %%%%%%%%%%%%
 % Common types
--record(board_size, {rows=7, cols=6}).
 -type game_var() :: std | pop.
 %% Game Variant
 -type game_state() :: playing | disconnected.
@@ -29,6 +28,9 @@ nolog(_Format, _Args) -> ok.
 -type seek_id() :: pos_integer().
 -type game_id() :: pos_integer().
 -type board() :: tuple().
+
+-record(board_size, {rows=7, cols=6}).
+
 -record(game_info,{
 		id :: pos_integer(),
 		pid=none :: pid() | none, 
@@ -38,6 +40,7 @@ nolog(_Format, _Args) -> ok.
 		ppid1 = none :: none | pid(),
 		ppid2  = none :: none | pid()
 		}). 
+
 -record(seek, {
 		id = none :: none | pos_integer(),
 		pid = none :: none | pid(),
@@ -45,6 +48,7 @@ nolog(_Format, _Args) -> ok.
 		variant = std :: game_var(), 
 		type = anon :: game_type()
 		}).
+
 -record(game_state, {
 		id = none :: game_id(),
 		variant :: game_var(),
@@ -54,3 +58,6 @@ nolog(_Format, _Args) -> ok.
 		color :: 1|2
 		}).
 
+-record(player_state, {
+        player_pid :: undefined|pid()
+        }).

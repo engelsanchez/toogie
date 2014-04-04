@@ -14,6 +14,9 @@ deps:
 app: deps
 	@$(REBAR) compile
 
+rel: app
+	@$(REBAR) generate
+
 clean:
 	@$(REBAR) clean
 	rm -f erl_crash.dump
