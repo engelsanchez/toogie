@@ -7,7 +7,7 @@
 % The rest are callback functions as this modules implements the generic
 % OTP gen_fsm (State machine) behavior.
 
--module(c4_player).
+-module(toogie_player).
 -behaviour(gen_fsm).
 % FSM callback exports
 -export([init/1, idle/3, handle_event/3, handle_sync_event/4, handle_info/3, 
@@ -18,7 +18,7 @@
 	other_played/4, quit_game/2, other_quit/2, other_returned/2, 
 	other_disconnected/2, disconnected/1, reconnected/2, game_started/2, 
 	seek_issued/2, seek_removed/2, quit/1]).
--include("c4_common.hrl").
+-include("toogie_common.hrl").
 
 -define(ISIZE, 6). % Width of zero padded integers in input text messages.
 -define(DISCONNECT_TIMEOUT, 60000). % Time to wait for player to reconnect
@@ -37,11 +37,11 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Public API
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% @doc Starts unsupervised c4_player process
+% @doc Starts unsupervised toogie_player process
 start(Args) ->
 	gen_fsm:start(?MODULE, Args, []).
 
-% @doc Starts c4_player process supervised by and linked to current process
+% @doc Starts toogie_player process supervised by and linked to current process
 start_link(Args) ->
 	gen_fsm:start_link(?MODULE, Args, []).
 
@@ -83,21 +83,21 @@ type2txt(Type) -> case Type of anon -> <<"ANON">>;priv -> <<"PRIV">> end.
 
 % @doc Parses a text command and executes the request action (SEEK, PLAY, etc).
 text_cmd(Pid, <<"ACCEPT_SEEK ", SeekId:?ISIZE/binary>>) ->
-	c4_player:accept_seek(Pid, b2i(SeekId));
+	toogie_player:accept_seek(Pid, b2i(SeekId));
 text_cmd(Pid, <<"CANCEL_SEEK">>) ->
-	c4_player:cancel_seek(Pid);
+	toogie_player:cancel_seek(Pid);
 text_cmd(Pid, <<"CANCEL_SEEK ", SeekId:?ISIZE/binary>>) ->
-	c4_player:cancel_seek(Pid, b2i(SeekId));
+	toogie_player:cancel_seek(Pid, b2i(SeekId));
 text_cmd(Pid, <<"PLAY ", GameId:?ISIZE/binary, " DROP ", Col/binary>>) ->
-	c4_player:play(Pid, b2i(GameId), {drop, b2i(Col)});
+	toogie_player:play(Pid, b2i(GameId), {drop, b2i(Col)});
 text_cmd(Pid, <<"QUIT_GAME ", GameId:?ISIZE/binary>>) ->
-	c4_player:quit_game(Pid, b2i(GameId));
+	toogie_player:quit_game(Pid, b2i(GameId));
 text_cmd(Pid, <<"QUIT">>) ->
-	c4_player:quit(Pid);
+	toogie_player:quit(Pid);
 text_cmd(Pid, <<"SEEK ", _Rest/binary>> = Cmd) ->
 	case parse_seek(Cmd) of
 		invalid_command -> invalid_command;
-		#seek{} = Seek -> c4_player:seek(Pid, Seek)
+		#seek{} = Seek -> toogie_player:seek(Pid, Seek)
 	end;
 text_cmd(_Pid, _) when is_pid(_Pid) ->
 	invalid_command.
@@ -291,12 +291,12 @@ handle_sync_event({reconnected, ParentPid}, From,
 	Self = self(),
 	if
 		is_pid(GamePid) ->
-			GameState = c4_game:game_state(GamePid, self()),
+			GameState = toogie_game:game_state(GamePid, self()),
 			ParentPid!{game, GameState#game_state{id=GameId}};
 		true ->
 			ParentPid!no_games,
 			% Send seeks to player now
-			SeekList = c4_game_master:seek_list(),
+			SeekList = toogie_game_master:seek_list(),
 			?log("Notifying parent ~w of current seeks ~w", [ParentPid, SeekList]),
 			lists:foreach(
 				fun(#seek{pid=SeekerPid, id=SeekId, variant=Var,board_size=BoardSize} = Seek) ->
@@ -326,10 +326,10 @@ handle_sync_event({quit_game, GameId}, From, _StateName,
 				  #state{game_id = GameId, game_pid=GamePid, parent=ParentPid} = Data) 
   when is_pid(GamePid) ->
 	?log("Player is quitting the current game", []),
-	c4_game:quit(GamePid, self()),
+	toogie_game:quit(GamePid, self()),
 	gen_fsm:reply(From, {leaving_game, GameId}),
 	% @todo When multiple games are allowed, we will only notify when all games are finished.
-	SeekList = c4_game_master:register_for_seeks(self()),
+	SeekList = toogie_game_master:register_for_seeks(self()),
 	do_seek_issued(SeekList, ParentPid),
 	{next_state , idle, Data#state{game_pid=none, game_id=none}};
 handle_sync_event({quit_game, GameId}, _From, _StateName, Data) ->
@@ -338,9 +338,9 @@ handle_sync_event({quit_game, GameId}, _From, _StateName, Data) ->
 handle_sync_event(quit, _From, _StateName, #state{game_pid=GamePid} = Data) ->
 	?log("Player sent quit message, going down", []),
 	Self = self(),
-	c4_player_master:player_quit(Self),
-	if is_pid(GamePid) -> c4_game:quit(GamePid, Self); true -> ok end,
-	c4_game_master:cancel_seek(Self),
+	toogie_player_master:player_quit(Self),
+	if is_pid(GamePid) -> toogie_game:quit(GamePid, Self); true -> ok end,
+	toogie_game_master:cancel_seek(Self),
 	{stop, normal, ok_quit, Data};
 handle_sync_event({other_quit, GamePid}, _From, _State, 
 				  #state{game_pid=GamePid, game_id=GameId, parent=ParentPid} = Data) 
@@ -348,7 +348,7 @@ handle_sync_event({other_quit, GamePid}, _From, _State,
 	?log("Other player quit, notifying caller process", []),
 	if is_pid(ParentPid)->ParentPid!{other_quit, GameId};true->ok end,
 	% @todo When multiple games are allowed, we will only notify when all games are finished.
-	SeekList = c4_game_master:register_for_seeks(self()),
+	SeekList = toogie_game_master:register_for_seeks(self()),
 	do_seek_issued(SeekList, ParentPid),
 	{reply, ok, idle, Data#state{game_id=none, game_pid=none}};
 handle_sync_event(get_state, _From, StateName, State) ->
@@ -368,7 +368,7 @@ handle_info({'DOWN', _Ref, process, Pid, _Reason}, State, Data) ->
 	{next_state, State, Data};
 handle_info({timeout, TRef, player_disconnected}, _State, #state{tref=TRef} = Data) ->
 	?log("Player disconnection timed out, going down for good", []),
-	c4_game_master:cancel_seek(self()),
+	toogie_game_master:cancel_seek(self()),
 	{stop, normal, Data#state{tref=none}};
 handle_info(Msg, StateName, Data) ->
 	?log("Unexpected event ~w in state ~w : ~w", [Msg, StateName, Data]),
@@ -387,7 +387,7 @@ idle({seek, Seek}, _From, State)  ->
 	do_seek(Seek, State);
 idle({accept_seek, SeekId}, _From, State)  ->
 	?log("Player wants to accept seek : ~w", [SeekId]),
-	Reply = c4_game_master:accept_seek(SeekId),
+	Reply = toogie_game_master:accept_seek(SeekId),
 	case Reply of
 		{new_game, #game_info{} = GameInfo, Turn, Color} ->
 			?log("New game started right away", []),
@@ -398,11 +398,11 @@ idle({accept_seek, SeekId}, _From, State)  ->
 	end;
 idle({cancel_seek}, _From, State) ->
 	?log("Player wants to cancel all seek requests", []),
-	Reply = c4_game_master:cancel_seek(self()),
+	Reply = toogie_game_master:cancel_seek(self()),
 	{reply, Reply, idle, State};
 idle({cancel_seek, SeekId}, _From, State) when is_integer(SeekId) ->
 	?log("Player wants to cancel seek ~w", [SeekId]),
-	Reply = c4_game_master:cancel_seek(self(), SeekId),
+	Reply = toogie_game_master:cancel_seek(self(), SeekId),
 	% If private seek canceled, go back to normal disconnection timeout
 	% Since we can't tell if seek was private, assume it was for now since user
 	% can not issue both types at once.
@@ -428,20 +428,20 @@ idle(Event, _From, State) ->
 % @todo Map input game id to game, ignoring now assuming single game.
 my_turn({play, GameId, Move}, {ParentPid, _Tag} = From, #state{game_pid=GamePid, parent=ParentPid} = State) ->
 	?log("Player played game ~w  ~w", [GameId, Move]),
-	case c4_game:play(GamePid, self(), Move) of
+	case toogie_game:play(GamePid, self(), Move) of
 		invalid_move -> {reply, {error, invalid_move, <<"Invalid Move">>}, my_turn, State};
 		not_your_turn -> {reply, {error, not_your_turn, <<"Wait for your turn to move">>}, my_turn, State};
 		ok -> {reply, {play_ok, GameId, Move}, other_turn, State};
 		you_win ->
 			gen_fsm:reply(From, {you_win, GameId, Move}),
 			% @todo When multiple games are allowed, we will only notify when all games are finished.
-			SeekList = c4_game_master:register_for_seeks(self()),
+			SeekList = toogie_game_master:register_for_seeks(self()),
 			do_seek_issued(SeekList, ParentPid),
 			{next_state, idle, State#state{game_pid=none}};
 		game_draw ->
 			gen_fsm:reply(From, {game_draw, GameId, Move}),
 			% @todo When multiple games are allowed, we will only notify when all games are finished.
-			SeekList = c4_game_master:register_for_seeks(self()),
+			SeekList = toogie_game_master:register_for_seeks(self()),
 			do_seek_issued(SeekList, ParentPid),
 			{next_state, idle, State#state{game_pid=none}}
 	end;
@@ -459,7 +459,7 @@ other_turn({other_played, GamePid, Move, game_draw}, _From, #state{game_pid=Game
   when is_pid(GamePid), is_pid(PPid) ->
 	?log("Other player played and it's a draw ~w", [Move]),
 	PPid ! {other_played_draw, GameId, Move},
-	SeekList = c4_game_master:register_for_seeks(self()),
+	SeekList = toogie_game_master:register_for_seeks(self()),
 	do_seek_issued(SeekList, PPid),
 	{reply, ok, idle, State#state{game_pid=none, game_id=none}};
 other_turn({other_played, GamePid, Move, you_lose}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
@@ -467,7 +467,7 @@ other_turn({other_played, GamePid, Move, you_lose}, _From, #state{game_pid=GameP
 	?log("Other player played ~w and wins", [Move]),
 	PPid ! {other_won, GameId, Move},
 	% @todo When multiple games are allowed, we will only notify when all games are finished.
-	SeekList = c4_game_master:register_for_seeks(self()),
+	SeekList = toogie_game_master:register_for_seeks(self()),
 	do_seek_issued(SeekList, PPid),
 	{reply, ok, idle, State#state{game_pid=none}};
 other_turn(Event, _From, State) ->
@@ -495,14 +495,14 @@ new_game(#game_info{pid=GamePid, id=GameId} = GameInfo, Turn, Color, State) ->
 do_disconnected(#state{game_pid=GamePid, disconnect_timeout=Timeout} = Data) ->
 	case GamePid of 
 		none -> ok;
-		_ -> c4_game:disconnect(GamePid, self())
+		_ -> toogie_game:disconnect(GamePid, self())
 	end,
 	?log("Setting timer to stop player process in ~w seconds", [Timeout/1000]),
 	TRef = erlang:start_timer(Timeout, self(), player_disconnected),
 	Data#state{parent=none, tref=TRef}.
 
 do_reconnected(ParentPid, #state{game_pid=GamePid, tref=TRef} = Data) when is_pid(ParentPid)->
-	if is_pid(GamePid) -> c4_game:reconnect(GamePid, self()); true -> ok end,
+	if is_pid(GamePid) -> toogie_game:reconnect(GamePid, self()); true -> ok end,
 	if is_reference(TRef) -> erlang:cancel_timer(TRef); true -> ok end,
 	Data#state{parent=ParentPid, tref=none}.
 
@@ -532,7 +532,7 @@ do_seek_removed(SeekId, ParentPid) ->
 
 do_seek(#seek{variant=Var,type=Type, board_size=BoardSize} = Seek, State) ->
 	?log("Player seek : ~w", [Seek]),
-	Reply = c4_game_master:seek(Seek#seek{pid=self()}),
+	Reply = toogie_game_master:seek(Seek#seek{pid=self()}),
 	case Reply of
 		{new_game, #game_info{} = GameInfo, Turn, Color} ->
 			?log("New game started right away", []),
@@ -606,26 +606,26 @@ expect_game(GameInfo, Turn, Color) ->
 	end.
 	
 player_test() ->
-	error_logger:logfile({open, "c4_server.log"}),
+	error_logger:logfile({open, "toogie_server.log"}),
 	error_logger:tty(false),
 	?debugMsg("Starting Game Master"),
-	{ok, _GMId} = c4_game_master:start(),
+	{ok, _GMId} = toogie_game_master:start(),
 	?debugMsg("Starting Player Master"),
-	{ok, _PMId} = c4_player_master:start(),
+	{ok, _PMId} = toogie_player_master:start(),
 	?debugMsg("Starting Player 1"),
-	{ok, P1, _P1Str} = c4_player_master:connect(),
+	{ok, P1, _P1Str} = toogie_player_master:connect(),
 	?debugMsg("Starting Player 2"),
-	{ok, P2, _P2Str} = c4_player_master:connect(),
+	{ok, P2, _P2Str} = toogie_player_master:connect(),
 	?debugMsg("Issuing first seek"),
-	S1 = c4_player:text_cmd(P1, <<"SEEK ANON C4 STD 07x06">>),
+	S1 = toogie_player:text_cmd(P1, <<"SEEK ANON C4 STD 07x06">>),
 	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=7,rows=6}}}, S1),
 	{seek_pending, #seek{id=SeekId1} = Seek1} = S1,
 	expect_seek(Seek1), 
 	?debugMsg("Player 3 will start, should receive previous seek upon connecting"),
-	{ok, P3, _P3Str} = c4_player_master:connect(),
+	{ok, P3, _P3Str} = toogie_player_master:connect(),
 	expect_seek(#seek{id=SeekId1, board_size=#board_size{cols=7,rows=6}, variant=std, type=anon}),
 	?debugMsg("Player 3 will issue seek and wait"),
-	S2 = c4_player:text_cmd(P3, <<"SEEK ANON C4 STD 08x07">>),
+	S2 = toogie_player:text_cmd(P3, <<"SEEK ANON C4 STD 08x07">>),
 	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=8,rows=7}}}, S2),
 	{seek_pending, #seek{id=SeekId2} = Seek2} = S2,
 	expect_seek(Seek2),
@@ -633,9 +633,9 @@ player_test() ->
 	?debugMsg("Checking current seek list"),
 	?assertEqual(lists:sort([#seek{pid=P1, variant=std, id=SeekId1, type=anon, board_size=#board_size{cols=7,rows=6}},
 			#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}]),
-		lists:sort(c4_game_master:seek_list())),
+		lists:sort(toogie_game_master:seek_list())),
 	?debugMsg("Issuing second seek, should match first and start game"),
-	S3 = c4_player:text_cmd(P2, <<"SEEK ANON C4 STD 07x06">>), 
+	S3 = toogie_player:text_cmd(P2, <<"SEEK ANON C4 STD 07x06">>), 
 	?assertMatch({new_game, #game_info{id=SeekId1, variant=std, type=anon, board_size=#board_size{cols=7,rows=6}} , other_turn, 2}, S3),
 	{_, #game_info{id=GameId} = Game1Info, _, _} = S3,
 	expect_game(Game1Info, your_turn, 1),
@@ -645,11 +645,11 @@ player_test() ->
 	do_move(GameId, P1, {you_win, GameId, {drop,1}}, {drop,1}), 
 	?debugMsg("First player won. Checking current seek list and reception of current seeks upon game end by both players"),
 	?assertEqual([#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}],
-		c4_game_master:seek_list()),
+		toogie_game_master:seek_list()),
 	expect_seek(#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}),
 	expect_seek(#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}),
 	?debugMsg("Now player 1 will accept player 3's seek and play"),
-	R2 = c4_player:text_cmd(P1, <<"ACCEPT_SEEK ",(i2b(SeekId2,?ISIZE))/binary>>),
+	R2 = toogie_player:text_cmd(P1, <<"ACCEPT_SEEK ",(i2b(SeekId2,?ISIZE))/binary>>),
 	?assertMatch({new_game, #game_info{id=SeekId2, variant=std, type=anon, board_size=#board_size{cols=8,rows=7}} , other_turn, 2}, R2),
 	{_, #game_info{id=Game2Id} = Game2Info, _, _} = R2,
 	expect_game(Game2Info, your_turn, 1),
@@ -658,21 +658,21 @@ player_test() ->
 	?debugMsg("And now, the winning move"),
 	do_move(Game2Id, P3, {you_win, Game2Id, {drop, 8}}, {drop, 8}), 
 	?debugMsg("Player 3 won. Checking current seek list and reception of current seeks upon game end by both players"),
-	?assertEqual([], c4_game_master:seek_list()),
+	?assertEqual([], toogie_game_master:seek_list()),
 	
 	?debugMsg("Player 1 will issue another seek and wait"),
-	S4 = c4_player:text_cmd(P1, <<"SEEK ANON C4 STD 07x06">>),
+	S4 = toogie_player:text_cmd(P1, <<"SEEK ANON C4 STD 07x06">>),
 	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=7,rows=6}}}, S4),
 	{seek_pending, #seek{id=SeekId4} = Seek4} = S4,
 	expect_seek(Seek4),
 	expect_seek(Seek4),
 	?debugMsg("Now player 2 will accept player 1's seek and play"),
-	AS2 = c4_player:text_cmd(P2, <<"ACCEPT_SEEK ",(i2b(SeekId4,?ISIZE))/binary>>),
+	AS2 = toogie_player:text_cmd(P2, <<"ACCEPT_SEEK ",(i2b(SeekId4,?ISIZE))/binary>>),
 	?assertMatch({new_game, #game_info{id=SeekId4, variant=std, type=anon, board_size=#board_size{cols=7,rows=6}} , other_turn, 2}, AS2),
 	{_, #game_info{id=_Game3Id} = Game3Info, _, _} = AS2,
 	expect_game(Game3Info, your_turn, 1),
 	?debugMsg("Player 3 will issue seek and wait"),
-	S5 = c4_player:text_cmd(P3, <<"SEEK ANON C4 STD 08x07">>),
+	S5 = toogie_player:text_cmd(P3, <<"SEEK ANON C4 STD 08x07">>),
 	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=8,rows=7}}}, S5),
 	{seek_pending, #seek{id=_SeekId5} = Seek5} = S5,
 	?debugMsg("Will play game #3 now"),
@@ -696,15 +696,15 @@ player_test() ->
 	expect_seek(Seek5),
 	expect_seek(Seek5),
 	?debugMsg("Shutting player processes"),
-	c4_player:quit(P1),
-	c4_player:quit(P2),
+	toogie_player:quit(P1),
+	toogie_player:quit(P2),
 	?debugMsg("Shutting game master process"),
-	c4_game_master:stop(),
+	toogie_game_master:stop(),
 	?debugMsg("Shutting player master process"),
-	c4_player_master:stop().
+	toogie_player_master:stop().
 
 do_move(GameId, P, Result, Move) ->
-	?assertEqual(Result, c4_player:play(P, GameId, Move)),
+	?assertEqual(Result, toogie_player:play(P, GameId, Move)),
 	ok.
 
 % @doc Helper to perform a bunch of moves in one go.

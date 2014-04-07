@@ -1,7 +1,7 @@
 % @doc Handles websocket text messages and translates them
-% into c4_player commands (join a game, play, quit, etc).
+% into toogie_player commands (join a game, play, quit, etc).
 
--module(c4_websocket_handler).
+-module(toogie_websocket_handler).
 -behaviour(cowboy_websocket_handler).
 -export([init/3,
          websocket_init/3,
@@ -9,7 +9,7 @@
          websocket_info/3,
          websocket_terminate/3]).
 
--include("c4_common.hrl").
+-include("toogie_common.hrl").
 
 -record(state, {
         player_state :: #player_state{}
@@ -18,7 +18,7 @@
 init({tcp, http}, _Req, _Opts) ->
     {upgrade, protocol, cowboy_websocket}.
 
-% @doc When the websocket is created, a child c4_player process is spawned to
+% @doc When the websocket is created, a child toogie_player process is spawned to
 % which we'll forward the user requests.
 -spec(websocket_init(term(), term(), term()) -> {ok, term(), #state{}} ).
 websocket_init(_Any, Req, []) ->
@@ -35,17 +35,17 @@ websocket_handle({text, Msg}, Req, State = #state{player_state=PlayerState}) ->
             {noreply, Req, State#state{player_state=NewPlayerState}}
     end.
 
-% @doc Handles messages sent from c4_player process and replies to
+% @doc Handles messages sent from toogie_player process and replies to
 % websocket client.
 % TODO: type player messages to distinguish from others
 websocket_info(Event, Req, State) ->
-    {reply, {text, c4_player:text_reply(Event)}, Req, State}.
+    {reply, {text, toogie_player:text_reply(Event)}, Req, State}.
 
-% @doc It terminates the child c4_player process when the websocket is closed.
+% @doc It terminates the child toogie_player process when the websocket is closed.
 websocket_terminate(_Reason, _Req, #state{player_state=#player_state{player_pid=PlayerPid}}) 
         when is_pid(PlayerPid) ->
 	?log("Websocket connection closing, notifying player process of disconnect",[]),
-    c4_player:disconnected(PlayerPid),
+    toogie_player:disconnected(PlayerPid),
 	ok;
 websocket_terminate(_Reason, _Req, _State) ->
 	?log("Websocket connection closing without a player process",[]),

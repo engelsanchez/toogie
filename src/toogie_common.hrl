@@ -33,7 +33,7 @@ nolog(_Format, _Args) -> ok.
 
 -record(game_info,{
 		id :: pos_integer(),
-		pid=none :: pid() | none, 
+		pid = none :: pid() | none, 
 		type :: game_type(), 
 		variant :: game_var(), 
 		board_size :: #board_size{},

@@ -1,5 +1,5 @@
 % @doc Handles the table of players registered to receive notifications
--module(c4_player_master).
+-module(toogie_player_master).
 -behaviour(gen_server).
 % gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -7,22 +7,22 @@
 -export([start/0, start_link/0, stop/0, connect/0, connect/1, register_player/1, 
 		 unregister_player/1, notify_seek_removed/2, notify_seek_issued/1,
 		 player_quit/1]).
--include("c4_common.hrl").
+-include("toogie_common.hrl").
 -record(state, {parent}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public API
     
-% @doc Starts a standalone c4_game_master process. Mostly for testing.
+% @doc Starts a standalone toogie_game_master process. Mostly for testing.
 -spec(start() ->  {ok, pid()} | ignore | {error, binary()}).
 start() ->
-	gen_server:start({local, c4_player_master}, ?MODULE, self(), []).
+	gen_server:start({local, toogie_player_master}, ?MODULE, self(), []).
 
-% @doc Starts a c4_game_master process that is linked to the current
+% @doc Starts a toogie_game_master process that is linked to the current
 % process.
 -spec(start_link() -> {ok, pid()} | ignore | {error, binary()}).
 start_link() ->
-	gen_server:start_link({local, c4_player_master}, ?MODULE, self(), []).
+	gen_server:start_link({local, toogie_player_master}, ?MODULE, self(), []).
 
 % @doc Stops the player master process
 -spec(stop() -> ok).
@@ -70,45 +70,45 @@ notify_seek_issued(#seek{} = Seek) ->
 % gen_server initialization callback. 
 init(ParentId) ->
 	process_flag(trap_exit, true),
-	ets:new(c4_player_notify_tbl, [named_table, private, set]),
-	ets:new(c4_player_id_tbl, [named_table, private, set]),
-	ets:new(c4_player_pid_tbl, [named_table, private, set]),
+	ets:new(toogie_player_notify_tbl, [named_table, private, set]),
+	ets:new(toogie_player_id_tbl, [named_table, private, set]),
+	ets:new(toogie_player_pid_tbl, [named_table, private, set]),
 	erlang:start_timer(?LOG_STATE_INTERVAL, self(), log_state),
 	{ok, #state{parent=ParentId}}.
 
 % @doc Deletes the player table.
 % gen_server termination callback.
 terminate(_Reason, _State) ->
-	ets:delete(c4_player_notify_tbl),
-	ets:delete(c4_player_pid_tbl),
-	ets:delete(c4_player_id_tbl),
+	ets:delete(toogie_player_notify_tbl),
+	ets:delete(toogie_player_pid_tbl),
+	ets:delete(toogie_player_id_tbl),
 	ok.
 
 % @doc Creates a new child player process and assigns it a
 % unique ID.
 new_player({ParentPid, _Tag} = From, State) ->
-	{ok, Pid} = c4_player:start_link(ParentPid),
+	{ok, Pid} = toogie_player:start_link(ParentPid),
 	monitor(process, Pid),
 	do_register_player(Pid),
 	?log("Started new player ~w", [Pid]),
 	PlayerId = list_to_binary(uuid:uuid_to_string(uuid:get_v4())),
-	ets:insert(c4_player_id_tbl, {PlayerId, Pid}),
-	ets:insert(c4_player_pid_tbl, {Pid, PlayerId}),
+	ets:insert(toogie_player_id_tbl, {PlayerId, Pid}),
+	ets:insert(toogie_player_pid_tbl, {Pid, PlayerId}),
 	gen_server:reply(From, {ok, Pid, PlayerId}),
 	% Send seeks to player now
-	SeekList = c4_game_master:seek_list(),
+	SeekList = toogie_game_master:seek_list(),
 	?log("Notifying ~w of current seeks ~w", [Pid, SeekList]),
 	lists:foreach(
 		fun(#seek{pid=SeekerPid} = Seek) ->
 			case SeekerPid of
 				Pid -> ok;
-				_ -> c4_player:seek_issued(Pid, Seek)
+				_ -> toogie_player:seek_issued(Pid, Seek)
 			end
 		end, SeekList),
 	{noreply, State}.
 
 do_register_player(Pid) ->
-	ets:insert(c4_player_notify_tbl, {Pid}).
+	ets:insert(toogie_player_notify_tbl, {Pid}).
 
 % @doc 
 % gen_server synchronous request callback.
@@ -118,13 +118,13 @@ handle_call(connect, From, State) ->
 handle_call({connect, PlayerId}, {CallerId, _Tag} = From, State) ->
 	?log("Processing CONNECT AS ~s", [PlayerId]),
 	% Look up player id and process associated to it.
-	case ets:lookup(c4_player_id_tbl, PlayerId) of 
+	case ets:lookup(toogie_player_id_tbl, PlayerId) of 
 		[] -> 
 			?log("Player not found, creating new (~s)", [PlayerId]),
 			new_player(From, State);
 		[{_PlayerId, Pid}] -> 
 			?log("Player reconnected as ~s", [PlayerId]),
-			c4_player:reconnected(Pid, CallerId),
+			toogie_player:reconnected(Pid, CallerId),
 			{reply, {ok, Pid, PlayerId}, State}
 	end;
 handle_call({register_player, Pid}, _From, State) ->
@@ -132,7 +132,7 @@ handle_call({register_player, Pid}, _From, State) ->
 	{reply, ok, State};
 handle_call({unregister_player, Pid}, _From, State) ->
 	?log("Removing player ~w from notification list", [Pid]),
-	ets:delete(c4_player_notify_tbl, Pid),
+	ets:delete(toogie_player_notify_tbl, Pid),
 	{reply, ok, State};
 handle_call({player_quit, Pid}, _From, State) ->
 	{reply, do_player_quit(Pid), State};
@@ -160,21 +160,21 @@ handle_info({'EXIT', Pid, _Reason}, #state{parent=Pid} = State) ->
 	{stop, parent_die, State};
 handle_info({'EXIT', Pid, _Reason}, State) when is_pid(Pid) ->
 	?log("Player ~w down, canceling seeks and removing player info", [Pid]),
-	c4_game_master:cancel_seek(Pid),
-	case ets:lookup(c4_player_pid_tbl, Pid) of
+	toogie_game_master:cancel_seek(Pid),
+	case ets:lookup(toogie_player_pid_tbl, Pid) of
 		[] -> {noreply, State}; 
 		[{Pid, PlayerId}] -> 
-			ets:delete(c4_player_pid_tbl, Pid),
-			ets:delete(c4_player_id_tbl, PlayerId),
+			ets:delete(toogie_player_pid_tbl, Pid),
+			ets:delete(toogie_player_id_tbl, PlayerId),
 			{noreply, State}
 	end;
 handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
 	do_player_quit(Pid),
 	{noreply, State};
 handle_info({timeout, _Ref, log_state}, State) ->
-	N = ets:info(c4_player_notify_tbl, size),
-	P = ets:info(c4_player_pid_tbl, size),
-	I = ets:info(c4_player_id_tbl, size),
+	N = ets:info(toogie_player_notify_tbl, size),
+	P = ets:info(toogie_player_pid_tbl, size),
+	I = ets:info(toogie_player_id_tbl, size),
 	?log("~w state:~nPlayer notify = ~w~nPids = ~w~nIds = ~w~n", [?MODULE, N, P, I]),
 	erlang:start_timer(?LOG_STATE_INTERVAL, self(), log_state),
 	{noreply, State};
@@ -191,11 +191,11 @@ unexpected(Event, State) ->
 	{noreply, State}.
 
 do_player_quit(Pid) ->
-	case ets:lookup(c4_player_pid_tbl, Pid) of
+	case ets:lookup(toogie_player_pid_tbl, Pid) of
 		[{Pid, PlayerId}] ->
-			ets:delete(c4_player_notify_tbl, Pid),
-			ets:delete(c4_player_pid_tbl, Pid),
-			ets:delete(c4_player_id_tbl, PlayerId),
+			ets:delete(toogie_player_notify_tbl, Pid),
+			ets:delete(toogie_player_pid_tbl, Pid),
+			ets:delete(toogie_player_id_tbl, PlayerId),
 			ok;
 		[] -> no_player
 	end.
@@ -208,12 +208,12 @@ send_seek_issued(#seek{pid=SPid} = Seek) ->
 		fun({Pid}, []) -> 
 			case Pid of 
 				SPid -> ok;
-				_ -> c4_player:seek_issued(Pid, Seek)
+				_ -> toogie_player:seek_issued(Pid, Seek)
 			end, 
 			[] 
 		end, 
 		[], 
-		c4_player_notify_tbl
+		toogie_player_notify_tbl
 		),
 	ok.
 
@@ -227,11 +227,11 @@ send_seek_removed(SeekId, PlayerPids) when is_list(PlayerPids) ->
 		fun({Pid}, []) -> 
 			case lists:member(Pid, PlayerPids) of
 				true -> ok; 
-				false -> c4_player:seek_removed(Pid, SeekId)
+				false -> toogie_player:seek_removed(Pid, SeekId)
 			end,
 			[] 
 		end,
 		[], 
-		c4_player_notify_tbl
+		toogie_player_notify_tbl
 		),
 	ok.

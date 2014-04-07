@@ -5,7 +5,7 @@
 
 % Number of pieces required to be in a line for a win.
 -define(NUM_INLINE, 4).
--include("c4_common.hrl").
+-include("toogie_common.hrl").
 
 % @doc Checks if a board size is supported (7x6, 8x7, 9x7, 10x7)
 -spec(valid_size(#board_size{}) -> boolean()).

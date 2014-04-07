@@ -1,8 +1,8 @@
 {application, toogie,
  [
-  {description, "4 in line server"},
+  {description, "Two player turn based games server server"},
   {vsn, "1"},
-  {registered, [c4_game_master, c4_player_master]},
+  {registered, [toogie_game_master, toogie_player_master]},
   {applications, [
                   kernel,
                   stdlib,

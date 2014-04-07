@@ -1,8 +1,10 @@
+% @doc Handles game commands sent over raw TCP connections.
+% This is useful for testing with telnet.
 -module(toogie_tcp_handler).
 -behaviour(gen_server).
 -behaviour(ranch_protocol).
 
--include("c4_common.hrl").
+-include("toogie_common.hrl").
 %% ranch_protocol API.
 -export([start_link/4]).
 
@@ -16,11 +18,13 @@
 
 -export([init/4]).
 
--record(state, {socket, transport,
-                player_state, partial= <<>>}).
+-record(state, {socket,
+                transport,
+                player_state :: #player_state{},
+                partial= <<>> :: string()}).
 
 %% API.
-
+%% Used by Ranch to start connection handler.
 start_link(Ref, Socket, Transport, Opts) ->
     proc_lib:start_link(?MODULE, init, [Ref, Socket, Transport, Opts]).
 
@@ -74,7 +78,7 @@ handle_info({tcp_closed, _Socket}, State) ->
 handle_info({tcp_error, _, Reason}, State) ->
     {stop, Reason, State};
 handle_info(Msg, State=#state{socket=Socket, transport=Transport}) ->
-    Msg2 = c4_player:text_reply(Msg),
+    Msg2 = toogie_player:text_reply(Msg),
     Transport:send(Socket, <<Msg2/binary, "\r\n" >>),
     {noreply, State}.
 
@@ -88,7 +92,7 @@ terminate(_Reason, #state{
                 player_state=#player_state{player_pid=PlayerPid}})
        when is_pid(PlayerPid) ->
     ?log("Plain socket connection closing, notifying player process", []),
-    c4_player:disconnected(PlayerPid),
+    toogie_player:disconnected(PlayerPid),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

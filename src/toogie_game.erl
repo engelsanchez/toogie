@@ -1,10 +1,10 @@
-%% @doc Game process interface.
+%% @doc Game process.
 %% It receives moves from players and notifies the opponent of the move
 %% and whether the game has been won or the board is full.
 %% The public functions are {@link start/1}, {@link start_link/1},
 %% {@link play/3}, {@link disconnect/2}, {@link abandon/1} and {@link quit/2}.
 %% The other functions are FSM callbacks.
--module(c4_game).
+-module(toogie_game).
 -behaviour(gen_server).
 % gen_server callbacks
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2, code_change/3]).
@@ -13,7 +13,7 @@
 
 % gen_server State data structure
 -record(state, {p1=none, p1conn=false, color1, p2=none, p2conn=false, color2, board, game_var}).
--include("c4_common.hrl").
+-include("toogie_common.hrl").
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Public API
@@ -84,15 +84,15 @@ handle_call({play, P1, {drop, Col}}, _From, #state{p1=P1, p1conn=true, color1=Co
 			?log("Board ~w~n", [NewBoard]),
 			case c4_board:check_win(NewBoard, Row, Col) of
 				true ->
-					c4_player:other_played(P2, self(), {drop, Col}, you_lose), 
+					toogie_player:other_played(P2, self(), {drop, Col}, you_lose), 
 					{stop, normal, you_win, State#state{board=NewBoard}};
 				false -> 
 					case c4_board:is_full(NewBoard) of
 						false ->
-							c4_player:other_played(P2, self(), {drop, Col}, your_turn),
+							toogie_player:other_played(P2, self(), {drop, Col}, your_turn),
 							{reply, ok, turn_change(State#state{board=NewBoard})};
 						true ->
-							c4_player:other_played(P2, self(), {drop, Col}, game_draw),
+							toogie_player:other_played(P2, self(), {drop, Col}, game_draw),
 							{stop, normal, game_draw, turn_change(State#state{board=NewBoard})}
 					end
 			end;
@@ -102,7 +102,7 @@ handle_call({play, P1, {drop, Col}}, _From, #state{p1=P1, p1conn=true, color1=Co
 % @doc One or both players have disconnected and moves are not allowed.
 % Players may reconnect at any point.
 handle_call({join, P1}, _From, #state{p1=P1, p1conn=false, p2=P2, p2conn=P2Conn} = State) ->
-	c4_player:other_returned(P2, self()),
+	toogie_player:other_returned(P2, self()),
 	State2 = State#state{p1conn=true},
 	case P2Conn of
 		true ->
@@ -111,7 +111,7 @@ handle_call({join, P1}, _From, #state{p1=P1, p1conn=false, p2=P2, p2conn=P2Conn}
 			{reply, {in_game, wait}, State2}
 	end;
 handle_call({join, P2}, _From, #state{p1=P1, p1conn=P1Conn, p2=P2, p2conn=false} = State) ->
-	c4_player:other_returned(P1, self()),
+	toogie_player:other_returned(P1, self()),
 	State2 = State#state{p2conn=true},
 	case P1Conn of
 		true ->
@@ -121,19 +121,19 @@ handle_call({join, P2}, _From, #state{p1=P1, p1conn=P1Conn, p2=P2, p2conn=false}
 	end;
 % @doc Handles disconnections or requests to abandon a game.
 handle_call({quit, Pid}, _From, #state{p1=P1, p2=P2} = State) ->
-	c4_player:other_quit(case Pid of P1->P2; P2->P1 end, self()),
+	toogie_player:other_quit(case Pid of P1->P2; P2->P1 end, self()),
 	{stop, normal, ok, State};
 handle_call({disconnected, P1}, _From, #state{p1=P1, p1conn=true, p2=P2} = State) ->
-	c4_player:other_disconnected(P2, self()),
+	toogie_player:other_disconnected(P2, self()),
 	{reply, ok, State#state{p1conn=false}};
 handle_call({disconnected, P2}, _From, #state{p1=P1, p2=P2, p2conn=true} = State) ->
-	c4_player:other_disconnected(P1, self()),
+	toogie_player:other_disconnected(P1, self()),
 	{reply, ok, State#state{p2conn=false}};
 handle_call({reconnected, P1}, _From, #state{p1=P1, p1conn=false, p2=P2} = State) ->
-	c4_player:other_returned(P2, self()),
+	toogie_player:other_returned(P2, self()),
 	{reply, ok, State#state{p1conn=true}};
 handle_call({reconnected, P2}, _From, #state{p1=P1, p2=P2, p2conn=false} = State) ->
-	c4_player:other_returned(P1, self()),
+	toogie_player:other_returned(P1, self()),
 	{reply, ok, State#state{p2conn=true}};
 handle_call({abandon}, _From, State) ->
 	{stop, normal, ok, State};
