@@ -14,7 +14,7 @@
 		 waiting_for_reconnect/3, my_turn/3, other_turn/3, terminate/3, code_change/4]).
 % Public API exports
 -export([start/1, start_link/1, text_cmd/2, text_reply/1, get_state/1,
-	seek/2, cancel_seek/1, cancel_seek/2, accept_seek/2, joined/4, play/3, 
+	seek/2, cancel_seek/1, cancel_seek/2, accept_seek/2, joined/2, play/3, 
 	other_played/4, quit_game/2, other_quit/2, other_returned/2, 
 	other_disconnected/2, disconnected/1, reconnected/2, game_started/2, 
 	seek_issued/2, seek_removed/2, quit/1]).
@@ -45,41 +45,52 @@ start(Args) ->
 start_link(Args) ->
 	gen_fsm:start_link(?MODULE, Args, []).
 
-% @doc Reads board dimensions from text (07x06,08x07,etc).
-parse_board_size(<<W1:8/integer, W2:8/integer, "x", H1:8/integer, H2:8/integer>>) 
-		when W1 >= $0, W1 =< $9, W2 >= $0, W2 =< $9, H1 >= $0, H1 =< $9, H2 >= $0, H2 =< $9 ->
-	#board_size{rows= (H1-$0)*10+(H2-$0), cols=(W1-$0)*10+(W2-$0)};
-parse_board_size(_) -> undefined.
-
 % @doc Parses a seek command
 -spec(parse_seek(binary()) -> #seek{} | invalid_command).
-parse_seek(<<"SEEK ", GType:4/binary, " C4 ", GVar:3/binary, " ", BSpec:5/binary>>) ->
-	BoardSpec = parse_board_size(BSpec),
-	GameVar = case GVar of <<"STD">> -> std; <<"POP">> -> pop; _ -> undefined end,
-	GameType = case GType of <<"PRIV">> -> priv; <<"ANON">> -> anon; _ -> undefined end,
-	if
-		BoardSpec == undefined;GameVar == undefined;GameType == undefined -> invalid_command;
-		true -> #seek{board_size=BoardSpec, variant=GameVar, type=GameType}
+parse_seek(<<"SEEK ", GamePrivacyStr:4/binary,
+             " ", GameType:2/binary,
+             " ", SeekStr/binary>>) ->
+	GamePrivacy = case GamePrivacyStr of
+        <<"PRIV">> -> priv;
+        <<"ANON">> -> anon;
+        _ -> undefined
+    end,
+    case GamePrivacy of
+        undefined ->
+            invalid_command;
+		_ ->
+            #seek{game_privacy=GamePrivacy,
+                  game_type=GameType,
+                  seek_str=SeekStr}
 	end;
 parse_seek(_) -> invalid_command.
 
 % @doc Simple conversion of integer to binary string.
-i2b(I) -> list_to_binary(integer_to_list(I)).
+i2b(I) ->
+    list_to_binary(integer_to_list(I)).
 
 % @doc Integer to string conversion with left zero padding.
-i2b(I,Pad) -> list_to_binary(io_lib:format("~" ++  integer_to_list(Pad) ++ "..0B", [I])).
+i2b(I,Pad) ->
+    list_to_binary(io_lib:format("~" ++  integer_to_list(Pad) ++ "..0B", [I])).
 
 % @doc Parses integer from binary string.
 -spec(b2i(binary()) -> integer()).
-b2i(B) -> list_to_integer(binary_to_list(B)).
+b2i(B) ->
+    binary_to_integer(B).
 
 % @doc Translates turn atom to character (Y|O|W).
-turnc(Turn) -> case Turn of your_turn -> $Y; other_turn -> $O; wait -> $W  end.
+turnc(Turn) ->
+    case Turn of
+        your_turn -> $Y;
+        other_turn -> $O;
+        wait -> $W
+    end.
 
-% @doc Game variant -> binary string (POP|STD).
-var2txt(Variant) -> case Variant of std -> <<"STD">>;pop -> <<"POP">> end.
-
-type2txt(Type) -> case Type of anon -> <<"ANON">>;priv -> <<"PRIV">> end.
+privacy2txt(Type) ->
+    case Type of
+        anon -> <<"ANON">>;
+        priv -> <<"PRIV">>
+    end.
 
 % @doc Parses a text command and executes the request action (SEEK, PLAY, etc).
 text_cmd(Pid, <<"ACCEPT_SEEK ", SeekId:?ISIZE/binary>>) ->
@@ -88,54 +99,62 @@ text_cmd(Pid, <<"CANCEL_SEEK">>) ->
 	toogie_player:cancel_seek(Pid);
 text_cmd(Pid, <<"CANCEL_SEEK ", SeekId:?ISIZE/binary>>) ->
 	toogie_player:cancel_seek(Pid, b2i(SeekId));
-text_cmd(Pid, <<"PLAY ", GameId:?ISIZE/binary, " DROP ", Col/binary>>) ->
-	toogie_player:play(Pid, b2i(GameId), {drop, b2i(Col)});
+text_cmd(Pid, <<"PLAY ", GameId:?ISIZE/binary, " ", Move/binary>>) ->
+	toogie_player:play(Pid, b2i(GameId), Move);
 text_cmd(Pid, <<"QUIT_GAME ", GameId:?ISIZE/binary>>) ->
 	toogie_player:quit_game(Pid, b2i(GameId));
 text_cmd(Pid, <<"QUIT">>) ->
 	toogie_player:quit(Pid);
 text_cmd(Pid, <<"SEEK ", _Rest/binary>> = Cmd) ->
 	case parse_seek(Cmd) of
-		invalid_command -> invalid_command;
-		#seek{} = Seek -> toogie_player:seek(Pid, Seek)
+		invalid_command ->
+            invalid_command;
+		#seek{} = Seek ->
+            toogie_player:seek(Pid, Seek)
 	end;
 text_cmd(_Pid, _) when is_pid(_Pid) ->
 	invalid_command.
 
 % @doc Translates a reply to a text command into text for sending to client.
-text_reply({new_game, #game_info{id=GameId, variant=Var, board_size=#board_size{rows=H,cols=W}}, Turn, Color}) ->
-	<<"GAME ", (i2b(GameId))/binary, " C4 ", (var2txt(Var))/binary, " ", (i2b(W))/binary, "x", (i2b(H))/binary, " ",
-		(turnc(Turn)):8/integer, " ", (i2b(Color))/binary, " NEW">>;
-text_reply({game, #game_state{id=GameId, variant=Var, 
-							  board_size=#board_size{rows=H,cols=W}, 
-							  board=Board, turn=Turn, color=Color}}) ->
-	<<"GAME ", (i2b(GameId))/binary, " C4 ", (var2txt(Var))/binary, " ", (i2b(W))/binary, "x", (i2b(H))/binary, " ",
+text_reply({new_game, #game_info{id=GameId, game_type=Type, game_desc=Desc,
+                                 turn=Turn, color=Color}}) ->
+    <<"GAME ", (i2b(GameId))/binary, " ", Type/binary, " ", Desc/binary, " ",
+   (turnc(Turn)):8/integer, " ", (i2b(Color))/binary, " NEW">>;
+
+text_reply({game, #game_info{id=GameId, game_type=Type, game_desc=Desc,
+                             game_state=StateStr,
+                             turn=Turn, color=Color}}) ->
+	<<"GAME ", (i2b(GameId))/binary, " ", Type/binary, " ", Desc/binary, " ",
 		(turnc(Turn)):8/integer, " ", (i2b(Color))/binary, " BOARD ",
-	  (list_to_binary(io_lib:format("~w", [Board])))/binary >>;
+   StateStr/binary>>;
+
 text_reply({seek_removed, SeekId}) ->
 	<<"SEEK_REMOVED ", (i2b(SeekId))/binary>>;
 text_reply({duplicate_seek, SeekId}) ->
 	<<"DUPLICATE_SEEK ", (i2b(SeekId))/binary>>;
-text_reply({seek_issued, #seek{id=SeekId, board_size=#board_size{rows=H,cols=W}, variant=Var}}) ->
-	<<"SEEK_ISSUED ", (i2b(SeekId))/binary, " C4 ", (var2txt(Var))/binary, " ", (i2b(W))/binary, "x", (i2b(H))/binary>>;
-text_reply({seek_pending, #seek{id=SeekId, type=Type, variant=Var,board_size=#board_size{rows=H,cols=W}}}) ->
-	<<"SEEK_PENDING ", (type2txt(Type))/binary, " ", (i2b(SeekId))/binary, " C4 ", (var2txt(Var))/binary, " ", (i2b(W))/binary, "x", (i2b(H))/binary>>;
-text_reply({other_played, GameId, {drop, Col}}) when is_integer(GameId), is_integer(Col) ->
-	<<"OTHER_PLAYED ", (i2b(GameId))/binary, " DROP ", (i2b(Col))/binary>>;
-text_reply({other_played_draw, GameId, {drop, Col}}) when is_integer(GameId), is_integer(Col) ->
-	<<"OTHER_DRAW ", (i2b(GameId))/binary, " DROP ", (i2b(Col))/binary>>;
-text_reply({other_won, GameId, {drop, Col}}) when is_integer(Col) ->
-	<<"OTHER_WON ", (i2b(GameId))/binary, " DROP ", (i2b(Col))/binary>>;
+text_reply({seek_issued, #seek{id=SeekId, game_type=Type, seek_str=SeekStr}}) ->
+    <<"SEEK_ISSUED ", (i2b(SeekId))/binary, " ", Type/binary, " ",
+      SeekStr/binary>>;
+text_reply({seek_pending, #seek{id=SeekId, game_privacy=Privacy,
+                                game_type=Type, seek_str=SeekStr}}) ->
+    <<"SEEK_PENDING ", (privacy2txt(Privacy))/binary, " ", (i2b(SeekId))/binary,
+      " ", Type/binary, " ", SeekStr/binary>>;
+text_reply({other_played, GameId, Move}) when is_integer(GameId) ->
+	<<"OTHER_PLAYED ", (i2b(GameId))/binary, " ", Move/binary>>;
+text_reply({other_played_draw, GameId, Move}) when is_integer(GameId) ->
+    <<"OTHER_DRAW ", (i2b(GameId))/binary, " ", Move/binary>>;
+text_reply({other_won, GameId, Move})  ->
+	<<"OTHER_WON ", (i2b(GameId))/binary, " ", Move/binary>>;
 text_reply({other_disconnected, GameId}) ->
 	<<"OTHER_DISCONNECTED ", (i2b(GameId))/binary>>;
 text_reply({other_returned, GameId}) ->
 	<<"OTHER_RETURNED ", (i2b(GameId))/binary>>;
-text_reply({you_win, GameId, {drop, Col}}) when is_integer(GameId) ->
-	<<"YOU_WIN ", (i2b(GameId))/binary, " DROP ", (i2b(Col))/binary>>;
-text_reply({play_ok, GameId, {drop, Col}}) when is_integer(GameId) ->
-	<<"PLAY_OK ", (i2b(GameId))/binary, " DROP ", (i2b(Col))/binary>>;
-text_reply({game_draw, GameId, {drop, Col}}) when is_integer(GameId) ->
-	<<"DRAW ", (i2b(GameId))/binary, " DROP ", (i2b(Col))/binary>>;
+text_reply({you_win, GameId, Move}) when is_integer(GameId) ->
+	<<"YOU_WIN ", (i2b(GameId))/binary, " ", Move/binary>>;
+text_reply({play_ok, GameId, Move}) when is_integer(GameId) ->
+	<<"PLAY_OK ", (i2b(GameId))/binary, " ", Move/binary>>;
+text_reply({game_draw, GameId, Move}) when is_integer(GameId) ->
+	<<"DRAW ", (i2b(GameId))/binary, " ", Move/binary>>;
 text_reply({invalid_move, GameId}) when is_integer(GameId) ->
 	<<"INVALID_MOVE ", (i2b(GameId))/binary>>;
 text_reply({leaving_game, GameId}) when is_integer(GameId) ->
@@ -181,9 +200,9 @@ accept_seek(Pid, SeekId) ->
 	gen_fsm:sync_send_event(Pid, {accept_seek, SeekId}, ?INTERNAL_TIMEOUT).
 
 % @doc Called when paired with another player for a game
--spec(joined(pid(), #game_info{}, turn(), 1|2) -> {new_game, #game_info{}, turn(), 1|2}).
-joined(Pid, GameInfo, Turn, Color) ->
-	gen_fsm:sync_send_event(Pid, {new_game, GameInfo, Turn, Color}, ?INTERNAL_TIMEOUT).
+-spec(joined(pid(), #game_info{}) -> {new_game, #game_info{}}).
+joined(Pid, GameInfo) ->
+	gen_fsm:sync_send_event(Pid, {new_game, GameInfo}, ?INTERNAL_TIMEOUT).
 
 % @doc Executes a move for this player
 % Returns : play_ok | you_win | {error, ErrorCode, ErrorMsg}
@@ -292,24 +311,17 @@ handle_sync_event({reconnected, ParentPid}, From,
 	if
 		is_pid(GamePid) ->
 			GameState = toogie_game:game_state(GamePid, self()),
-			ParentPid!{game, GameState#game_state{id=GameId}};
+			ParentPid!{game, GameState#game_info{id=GameId}};
 		true ->
 			ParentPid!no_games,
 			% Send seeks to player now
 			SeekList = toogie_game_master:seek_list(),
 			?log("Notifying parent ~w of current seeks ~w", [ParentPid, SeekList]),
 			lists:foreach(
-				fun(#seek{pid=SeekerPid, id=SeekId, variant=Var,board_size=BoardSize} = Seek) ->
+				fun(#seek{pid=SeekerPid} = Seek) ->
 					case SeekerPid of
 						Self -> 
-							ParentPid ! 
-								{
-								 seek_pending, 
-								 #seek{id=SeekId,
-									   type=anon,
-									   variant=Var, 
-									   board_size=BoardSize}
-								};
+							ParentPid !  {seek_pending, Seek};
 						_ -> 
 							do_seek_issued(Seek, ParentPid)
 					end
@@ -389,9 +401,9 @@ idle({accept_seek, SeekId}, _From, State)  ->
 	?log("Player wants to accept seek : ~w", [SeekId]),
 	Reply = toogie_game_master:accept_seek(SeekId),
 	case Reply of
-		{new_game, #game_info{} = GameInfo, Turn, Color} ->
+		{new_game, #game_info{} = GameInfo} ->
 			?log("New game started right away", []),
-			new_game(GameInfo, Turn, Color, State);
+			new_game(GameInfo, State);
 		no_seek_found -> 
 			?log("Bad seek id or already taken", []),
 			{reply, {no_seek_found, SeekId}, idle, State}
@@ -413,28 +425,36 @@ idle({cancel_seek, SeekId}, _From, State) when is_integer(SeekId) ->
 			_ -> State
 		end,
 	{reply, {Reply, SeekId}, idle, NewState};
-idle({new_game, #game_info{} = GameInfo, Turn, Color} = Event, _From, #state{parent=ParentId} = State) ->
+idle({new_game, #game_info{} = GameInfo} = Event, _From,
+     #state{parent=ParentId} = State) ->
 	?log("New game started: ~w", [Event]),
 	case ParentId of
 		none -> ok;
-		_ -> ParentId ! {new_game, GameInfo#game_info{pid=none}, Turn, Color}
+		_ -> ParentId ! {new_game, GameInfo#game_info{pid=none}}
 	end,
-	new_game(GameInfo, Turn, Color, State);
+	new_game(GameInfo, State);
 idle(Event, _From, State) ->
 	?log("Unexpected message while idle : ~w ~w", [Event, State]),
 	{reply, {error, bad_cmd, "Join a game first"}, idle, State}.
 
 % @doc Waiting for this player to move state.
 % @todo Map input game id to game, ignoring now assuming single game.
-my_turn({play, GameId, Move}, {ParentPid, _Tag} = From, #state{game_pid=GamePid, parent=ParentPid} = State) ->
+my_turn({play, GameId, Move},
+        {ParentPid, _Tag} = From,
+        #state{game_pid=GamePid, parent=ParentPid} = State) ->
 	?log("Player played game ~w  ~w", [GameId, Move]),
 	case toogie_game:play(GamePid, self(), Move) of
-		invalid_move -> {reply, {error, invalid_move, <<"Invalid Move">>}, my_turn, State};
-		not_your_turn -> {reply, {error, not_your_turn, <<"Wait for your turn to move">>}, my_turn, State};
-		ok -> {reply, {play_ok, GameId, Move}, other_turn, State};
+		invalid_move ->
+            {reply, {error, invalid_move, <<"Invalid Move">>}, my_turn, State};
+		not_your_turn ->
+            {reply, {error, not_your_turn, <<"Wait for your turn to move">>},
+             my_turn, State};
+		ok ->
+            {reply, {play_ok, GameId, Move}, other_turn, State};
 		you_win ->
 			gen_fsm:reply(From, {you_win, GameId, Move}),
-			% @todo When multiple games are allowed, we will only notify when all games are finished.
+			% @todo When multiple games are allowed, we will only notify when
+            % all games are finished.
 			SeekList = toogie_game_master:register_for_seeks(self()),
 			do_seek_issued(SeekList, ParentPid),
 			{next_state, idle, State#state{game_pid=none}};
@@ -452,19 +472,19 @@ my_turn(Event, _From, State) ->
 % @doc Waiting for other player to move state.
 other_turn({other_played, GamePid, Move, your_turn}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
-	?log("Other player played  ~w", [Move]),
+	?log("Other player played  ~s", [Move]),
 	PPid ! {other_played, GameId, Move},
 	{reply, ok, my_turn, State};
 other_turn({other_played, GamePid, Move, game_draw}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
-	?log("Other player played and it's a draw ~w", [Move]),
+	?log("Other player played and it's a draw ~s", [Move]),
 	PPid ! {other_played_draw, GameId, Move},
 	SeekList = toogie_game_master:register_for_seeks(self()),
 	do_seek_issued(SeekList, PPid),
 	{reply, ok, idle, State#state{game_pid=none, game_id=none}};
 other_turn({other_played, GamePid, Move, you_lose}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
-	?log("Other player played ~w and wins", [Move]),
+	?log("Other player played ~s and wins", [Move]),
 	PPid ! {other_won, GameId, Move},
 	% @todo When multiple games are allowed, we will only notify when all games are finished.
 	SeekList = toogie_game_master:register_for_seeks(self()),
@@ -487,9 +507,14 @@ waiting_for_reconnect(Event, _From, State) ->
 % Internal functions
 
 % @doc Returns reply when new game started
-new_game(#game_info{pid=GamePid, id=GameId} = GameInfo, Turn, Color, State) ->
-	NextState = case Turn of your_turn -> my_turn; other_turn->other_turn;wait->waiting_for_reconnect end,
-	{reply, {new_game, GameInfo#game_info{pid=none}, Turn, Color}, NextState, State#state{game_pid=GamePid, game_id=GameId}}.
+new_game(#game_info{pid=GamePid, id=GameId, turn=Turn} = GameInfo, State) ->
+	NextState = case Turn of
+        your_turn -> my_turn;
+        other_turn->other_turn;
+        wait->waiting_for_reconnect
+    end,
+	{reply, {new_game, GameInfo#game_info{pid=none}}, NextState,
+  State#state{game_pid=GamePid, game_id=GameId}}.
 
 % @doc Notify our current game process of a disconnection
 do_disconnected(#state{game_pid=GamePid, disconnect_timeout=Timeout} = Data) ->
@@ -530,22 +555,22 @@ do_seek_removed(SeekId, ParentPid) ->
 	?log("Notifying ~w of removed seek ~w", [ParentPid, SeekId]),
 	ParentPid ! {seek_removed, SeekId}.
 
-do_seek(#seek{variant=Var,type=Type, board_size=BoardSize} = Seek, State) ->
+do_seek(#seek{game_privacy=Privacy} = Seek, State) ->
 	?log("Player seek : ~w", [Seek]),
 	Reply = toogie_game_master:seek(Seek#seek{pid=self()}),
 	case Reply of
-		{new_game, #game_info{} = GameInfo, Turn, Color} ->
+		{new_game, #game_info{} = GameInfo} ->
 			?log("New game started right away", []),
-			new_game(GameInfo, Turn, Color, State);
+			new_game(GameInfo, State);
 		{seek_pending, SeekId} -> 
 			?log("Player will have to wait for another", []),
 			NewState = 
-				case Type of
+				case Privacy of
 					anon -> State;
 					priv -> State#state{disconnect_timeout=?DISCONNECT_TIMEOUT_PRIV_GAME}
 				end,
 			% We are not exposing every internal seek attribute on reply
-			ReplySeek = #seek{id=SeekId, variant=Var, type=Type, board_size=BoardSize},
+			ReplySeek = Seek#seek{id=SeekId},
 			{reply, {seek_pending, ReplySeek}, idle, NewState};
 		{duplicate_seek, SeekId} ->
 			?log("Silly player issuing the same seek again ~w", [Seek]),
@@ -567,21 +592,15 @@ i2b_test() ->
 	?assertEqual(<<"0560">>, i2b(560, 4)),
 	?assertEqual(<<"388534">>, i2b(388534)).
 
-parse_board_size_test() ->
-	?assertEqual(#board_size{cols=7,rows=6}, parse_board_size(<<"07x06">>)),
-	?assertEqual(#board_size{cols=8,rows=7}, parse_board_size(<<"08x07">>)),
-	?assertEqual(#board_size{cols=9,rows=7}, parse_board_size(<<"09x07">>)),
-	?assertEqual(#board_size{cols=10,rows=7}, parse_board_size(<<"10x07">>)).
-
-parse_seek_test() ->
-	?assertEqual(#seek{board_size=#board_size{cols=7,rows=6},variant=std,type=anon}, parse_seek(<<"SEEK ANON C4 STD 07x06">>)).
 
 % @doc Asserts reception of a seek notification and returns the Seek id.
 -spec(expect_seek(#seek{}) -> pos_integer()).
-expect_seek(#seek{id=InSeekId, board_size=BoardSize, variant=Var, type=Type} = Seek) ->
+expect_seek(#seek{id=InSeekId, seek_str=SeekStr, game_privacy=Privacy} = Seek) ->
 	?debugFmt("Expecting seek message : ~w", [Seek]),
 	receive
-		{seek_issued, #seek{id=SeekId, board_size=BoardSize, variant=Var, type=Type}} = Msg1 ->
+        {seek_issued, #seek{id=SeekId,
+                            seek_str=SeekStr,
+                            game_privacy=Privacy}} = Msg1 ->
 			?debugFmt("Received ~w", [Msg1]),
 			case InSeekId of
 				none -> ok;
@@ -618,25 +637,31 @@ player_test() ->
 	{ok, P2, _P2Str} = toogie_player_master:connect(),
 	?debugMsg("Issuing first seek"),
 	S1 = toogie_player:text_cmd(P1, <<"SEEK ANON C4 STD 07x06">>),
-	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=7,rows=6}}}, S1),
+    ?assertMatch({seek_pending, #seek{game_privacy=anon,
+                                      seek_str="STD 07x06"}}, S1),
 	{seek_pending, #seek{id=SeekId1} = Seek1} = S1,
 	expect_seek(Seek1), 
 	?debugMsg("Player 3 will start, should receive previous seek upon connecting"),
 	{ok, P3, _P3Str} = toogie_player_master:connect(),
-	expect_seek(#seek{id=SeekId1, board_size=#board_size{cols=7,rows=6}, variant=std, type=anon}),
+	expect_seek(#seek{id=SeekId1, game_privacy=anon,
+                   seek_str="STD 07x06"}),
 	?debugMsg("Player 3 will issue seek and wait"),
 	S2 = toogie_player:text_cmd(P3, <<"SEEK ANON C4 STD 08x07">>),
-	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=8,rows=7}}}, S2),
+	?assertMatch({seek_pending, #seek{game_privacy=anon,
+                                   seek_str="STD 08x07"}}, S2),
 	{seek_pending, #seek{id=SeekId2} = Seek2} = S2,
 	expect_seek(Seek2),
 	expect_seek(Seek2),
 	?debugMsg("Checking current seek list"),
-	?assertEqual(lists:sort([#seek{pid=P1, variant=std, id=SeekId1, type=anon, board_size=#board_size{cols=7,rows=6}},
-			#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}]),
+    ?assertEqual(lists:sort([#seek{pid=P1, seek_str="STD 0x7x06", id=SeekId1,
+                                   game_privacy=anon},
+                             #seek{pid=P3, game_privacy=anon,
+                                   seek_str="STD 08x07", id=SeekId2}]),
 		lists:sort(toogie_game_master:seek_list())),
 	?debugMsg("Issuing second seek, should match first and start game"),
 	S3 = toogie_player:text_cmd(P2, <<"SEEK ANON C4 STD 07x06">>), 
-	?assertMatch({new_game, #game_info{id=SeekId1, variant=std, type=anon, board_size=#board_size{cols=7,rows=6}} , other_turn, 2}, S3),
+    ?assertMatch({new_game, #game_info{id=SeekId1, game_privacy=anon,
+                                    game_desc="STD 07x06"}, other_turn, 2}, S3),
 	{_, #game_info{id=GameId} = Game1Info, _, _} = S3,
 	expect_game(Game1Info, your_turn, 1),
 	?debugMsg("Will play the game now"),
@@ -644,13 +669,13 @@ player_test() ->
 	?debugMsg("And now, the winning move"),
 	do_move(GameId, P1, {you_win, GameId, {drop,1}}, {drop,1}), 
 	?debugMsg("First player won. Checking current seek list and reception of current seeks upon game end by both players"),
-	?assertEqual([#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}],
+	?assertEqual([#seek{pid=P3, seek_str="STD 08x07", id=SeekId2, game_privacy=anon}],
 		toogie_game_master:seek_list()),
-	expect_seek(#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}),
-	expect_seek(#seek{pid=P3, variant=std, id=SeekId2, type=anon, board_size=#board_size{cols=8,rows=7}}),
+	expect_seek(#seek{pid=P3, seek_str="STD 08x07", id=SeekId2, game_privacy=anon}),
+	expect_seek(#seek{pid=P3, seek_str="STD 08x07", id=SeekId2, game_privacy=anon}),
 	?debugMsg("Now player 1 will accept player 3's seek and play"),
 	R2 = toogie_player:text_cmd(P1, <<"ACCEPT_SEEK ",(i2b(SeekId2,?ISIZE))/binary>>),
-	?assertMatch({new_game, #game_info{id=SeekId2, variant=std, type=anon, board_size=#board_size{cols=8,rows=7}} , other_turn, 2}, R2),
+    ?assertMatch({new_game, #game_info{id=SeekId2, game_desc="STD 08x07", game_privacy=anon, turn=other_turn, color=2}}, R2),
 	{_, #game_info{id=Game2Id} = Game2Info, _, _} = R2,
 	expect_game(Game2Info, your_turn, 1),
 	?debugMsg("Will play game #2 now"),
@@ -662,18 +687,19 @@ player_test() ->
 	
 	?debugMsg("Player 1 will issue another seek and wait"),
 	S4 = toogie_player:text_cmd(P1, <<"SEEK ANON C4 STD 07x06">>),
-	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=7,rows=6}}}, S4),
+    ?assertMatch({seek_pending, #seek{game_privacy=anon,seek_str="STD 07x06",
+                                      game_type= <<"C4">>}}, S4),
 	{seek_pending, #seek{id=SeekId4} = Seek4} = S4,
 	expect_seek(Seek4),
 	expect_seek(Seek4),
 	?debugMsg("Now player 2 will accept player 1's seek and play"),
 	AS2 = toogie_player:text_cmd(P2, <<"ACCEPT_SEEK ",(i2b(SeekId4,?ISIZE))/binary>>),
-	?assertMatch({new_game, #game_info{id=SeekId4, variant=std, type=anon, board_size=#board_size{cols=7,rows=6}} , other_turn, 2}, AS2),
+    ?assertMatch({new_game, #game_info{id=SeekId4, game_desc="STD 07x06", game_privacy=anon, turn=other_turn, color=2}}, AS2),
 	{_, #game_info{id=_Game3Id} = Game3Info, _, _} = AS2,
 	expect_game(Game3Info, your_turn, 1),
 	?debugMsg("Player 3 will issue seek and wait"),
 	S5 = toogie_player:text_cmd(P3, <<"SEEK ANON C4 STD 08x07">>),
-	?assertMatch({seek_pending, #seek{variant=std,type=anon,board_size=#board_size{cols=8,rows=7}}}, S5),
+	?assertMatch({seek_pending, #seek{seek_str="STD 08x07", game_privacy=anon}}, S5),
 	{seek_pending, #seek{id=_SeekId5} = Seek5} = S5,
 	?debugMsg("Will play game #3 now"),
 	do_moves(Game2Id, P1, P2, [{drop,7},{drop,7},{drop,7},{drop,7},{drop,7},{drop,7},

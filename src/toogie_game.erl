@@ -7,30 +7,61 @@
 -module(toogie_game).
 -behaviour(gen_server).
 % gen_server callbacks
--export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2, code_change/3]).
+-export([init/1,
+         handle_cast/2,
+         handle_call/3,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
 % Public API
--export([start/1, start_link/1, play/3, game_state/2, disconnect/2, reconnect/2, abandon/1, quit/2]).
+-export([start/1,
+         start_link/1,
+         start_link/4,
+         play/3,
+         game_state/2,
+         disconnect/2,
+         reconnect/2,
+         abandon/1,
+         quit/2]).
+
+-type color() :: 1 | 2.
 
 % gen_server State data structure
--record(state, {p1=none, p1conn=false, color1, p2=none, p2conn=false, color2, board, game_var}).
+-record(state, {game_id :: integer(),
+                game_module :: atom(),
+                game_type :: binary(),
+                game_desc :: binary(),
+                game_state :: any(),
+                p1 :: pid(),
+                p1conn=false :: boolean(),
+                color1 :: color(),
+                p2 :: pid(),
+                p2conn=false :: boolean(),
+                color2 :: color()}).
+
 -include("toogie_common.hrl").
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Public API
 % @doc Starts unsupervised game process, mostly for testing.
 -spec(start(#game_info{}) -> {ok, pid()} | ignore | {error, string()}).
-start(GameInfo) ->
-	gen_server:start(?MODULE, GameInfo, []).
+start(GameArgs) ->
+	gen_server:start(?MODULE, GameArgs, []).
 
 % @doc Starts game process linked to the current process.
 -spec(start_link(#game_info{}) -> {ok, pid()} | ignore | {error, string()}).
-start_link(GameInfo) ->
-	gen_server:start_link(?MODULE, GameInfo, []).
+start_link(GameArgs) ->
+	gen_server:start_link(?MODULE, GameArgs, []).
+
+start_link(Pid1, Pid2, Mod, Seek = #seek{})
+        when is_pid(Pid1), is_pid(Pid2), is_atom(Mod) ->
+    gen_server:start_link(?MODULE, [Pid1, Pid2, Mod, Seek], []).
 
 % @doc Called when a player makes a move
--spec(play(pid(), pid(), tuple()) -> invalid_move | not_your_turn | ok | you_win ).
-play(GamePid, PlayerPid, {drop, Col}) ->
-	gen_server:call(GamePid, {play, PlayerPid, {drop, Col}}, ?INTERNAL_TIMEOUT).
+-spec(play(pid(), pid(), tuple()) ->
+      invalid_move | not_your_turn | ok | you_win ).
+play(GamePid, PlayerPid, Move) ->
+	gen_server:call(GamePid, {play, PlayerPid, Move}, ?INTERNAL_TIMEOUT).
 
 % @doc Returns information about the game relevant to the calling player
 game_state(GamePid, PlayerPid) ->
@@ -61,11 +92,19 @@ quit(GamePid, PlayerPid) ->
 % @doc Creates the empty board and starts monitoring the player processes.
 % FSM initialization callback.
 -spec(init(#game_info{}) -> {ok, playing, #state{}}).
-init(#game_info{ppid1=P1, ppid2=P2, board_size=BoardSize, variant=GameVar}) when is_pid(P1), is_pid(P2)  ->
+init([P1, P2, Mod, #seek{id=GameId, seek_str=SeekStr, game_type=GameType}])
+        when is_pid(P1), is_pid(P2)  ->
 	?log("Starting~n", []),
 	monitor(process, P1),
 	monitor(process, P2),
-	{ok, #state{p1=P1, p1conn=true, color1=1, p2=P2, p2conn=true, color2=2, board=c4_board:new(BoardSize), game_var=GameVar}}.
+    GameState = Mod:new(SeekStr),
+    {ok, #state{game_id=GameId,
+                game_module=Mod,
+                game_desc=SeekStr,
+                game_type=GameType,
+                game_state=GameState,
+                p1=P1, p1conn=true, color1=1,
+                p2=P2, p2conn=true, color2=2}}.
 
 % @doc Waiting for a move
 % returns: 
@@ -77,28 +116,21 @@ init(#game_info{ppid1=P1, ppid2=P2, board_size=BoardSize, variant=GameVar}) when
 %   played, Col, you_lose|your_turn
 handle_call({play, P2, _Move}, _From, #state{p2=P2} = State) ->
 	{reply, not_your_turn, State};
-handle_call({play, P1, {drop, Col}}, _From, #state{p1=P1, p1conn=true, color1=Color, p2=P2, board=Board} = State) ->
-	?log("Player ~w played ~w~n", [P1, Col]),
-	case c4_board:add_piece(Board, Color, Col) of
-		{ok, NewBoard, Row} ->
-			?log("Board ~w~n", [NewBoard]),
-			case c4_board:check_win(NewBoard, Row, Col) of
-				true ->
-					toogie_player:other_played(P2, self(), {drop, Col}, you_lose), 
-					{stop, normal, you_win, State#state{board=NewBoard}};
-				false -> 
-					case c4_board:is_full(NewBoard) of
-						false ->
-							toogie_player:other_played(P2, self(), {drop, Col}, your_turn),
-							{reply, ok, turn_change(State#state{board=NewBoard})};
-						true ->
-							toogie_player:other_played(P2, self(), {drop, Col}, game_draw),
-							{stop, normal, game_draw, turn_change(State#state{board=NewBoard})}
-					end
-			end;
-		invalid_move -> 
+handle_call({play, P1, Move}, _From, #state{game_module=Mod, p1=P1, p1conn=true, color1=Color, p2=P2, game_state=GameState} = State) ->
+    case Mod:play(Color, Move, GameState) of
+        {win, NewGameState} ->
+            toogie_player:other_played(P2, self(), Move, you_lose), 
+            {stop, normal, you_win, State#state{game_state=NewGameState}};
+        {ok, NewGameState} ->
+            toogie_player:other_played(P2, self(), Move, your_turn),
+            {reply, ok, turn_change(State#state{game_state=NewGameState})};
+        {draw, NewGameState} ->
+            toogie_player:other_played(P2, self(), Move, game_draw),
+            State2 = turn_change(State#state{game_state=NewGameState}),
+            {stop, normal, game_draw, State2}; 
+        invalid_move ->
 			{reply, invalid_move, State}
-	end;
+    end;
 % @doc One or both players have disconnected and moves are not allowed.
 % Players may reconnect at any point.
 handle_call({join, P1}, _From, #state{p1=P1, p1conn=false, p2=P2, p2conn=P2Conn} = State) ->
@@ -138,18 +170,21 @@ handle_call({reconnected, P2}, _From, #state{p1=P1, p2=P2, p2conn=false} = State
 handle_call({abandon}, _From, State) ->
 	{stop, normal, ok, State};
 handle_call({game_state, Pid}, _From, 
-			#state{p1=P1, p2=P2, color1=C1,color2=C2, board=Board, game_var=Variant} = State)
+            #state{game_id=GameId, game_module=Mod, game_type=GameType,
+                   game_state=GameState, game_desc=GameDesc,
+                   p1=P1, p2=P2, color1=C1,color2=C2} = State)
 	when Pid =:= P1;Pid =:= P2 ->
-	if
-		Pid =:= P1 -> Turn = your_turn,Color=C1;
-		Pid =:= P2 -> Turn = other_turn,Color=C2
-	end,
-	{reply, #game_state{turn = Turn,
-						color=Color,
-						variant = Variant,
-						board=Board, 
-						board_size=#board_size{rows=?num_rows(Board),cols=?num_cols(Board)}
-					   }, State}; 
+    {Turn, Color} = if
+        Pid =:= P1 -> {your_turn, C1};
+        Pid =:= P2 -> {other_turn, C2}
+    end,
+    StateStr = Mod:state_string(GameState),
+    {reply, #game_info{turn = Turn,
+                       color = Color,
+                       id = GameId,
+                       game_desc = GameDesc,
+                       game_type = GameType,
+                       game_state = StateStr}, State}; 
 handle_call(Msg, _From, State) ->
 	?log("Unexpected message ~w : ~w", [Msg, State]),
 	{reply, {error, invalid_command}, State}.
