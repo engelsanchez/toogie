@@ -2,10 +2,18 @@
 %% For boards, row 1 is bottom, column 1 is left.
 -module(c4_board).
 -export([new/1, valid_size/1, add_piece/3, check_win/3, is_full/1]).
+-export_type([board/0]).
+
+-include("c4_board.hrl").
 
 % Number of pieces required to be in a line for a win.
 -define(NUM_INLINE, 4).
--include("toogie_common.hrl").
+% % Returns the piece value on the given row,column
+-define(piece(Board, Row, Col),element(Col, element(Row, Board))).
+-define(num_rows(Board), erlang:tuple_size(Board)).
+-define(num_cols(Board), erlang:tuple_size(element(1, Board))).
+
+-type board() :: tuple().
 
 % @doc Checks if a board size is supported (7x6, 8x7, 9x7, 10x7)
 -spec(valid_size(#board_size{}) -> boolean()).

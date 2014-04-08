@@ -8,12 +8,26 @@
 % gen_server callbacks
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2, code_change/3]).
 % Public API
--export([start/0, start_link/0, stop/0,
-		 seek/1, cancel_seek/1, cancel_seek/2, accept_seek/1,
+-export([start/0,
+         start_link/0,
+         stop/0,
+		 seek/1,
+         cancel_seek/1,
+         cancel_seek/2,
+         accept_seek/1,
 		 game_finished/1, 
-		 register_for_seeks/1, seek_list/0, game_list/0]).
+		 register_for_seeks/1,
+         seek_list/0,
+         game_list/0]).
+
 -include("toogie_common.hrl").
--record(state, {seeks, seeks_by_player, seeks_by_id, parent, seed=now()}).
+
+-record(state, {game_modules :: orddict:orddict(),
+                seeks :: dict(),                    % seek -> id
+                seeks_by_player :: dict(),          % player pid -> seek
+                seeks_by_id :: dict(),              % id -> seek
+                parent :: pid(),
+                seed=now() :: erlang:timestamp()}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public API
@@ -76,7 +90,7 @@ stop() ->
 % @doc Starts trapping exits, creates player and game tables
 % and starts FSM in loop state.
 % Callback method for the OTP gen_fsm behavior.
-init(ParentPid)->
+init(ParentPid) when is_pid(ParentPid) ->
 	?log("Starting", []),
 	process_flag(trap_exit, true),
 	ets:new(toogie_game_id_tbl, [named_table, private, set]),
@@ -86,8 +100,12 @@ init(ParentPid)->
 	Seeks = dict:new(),
 	SeeksByPlayer= dict:new(),
 	SeeksById = dict:new(),
+    {ok, GameMods} = application:get_env(game_modules),
+    ?log("Starting with game modules ~p", [GameMods]),
 	erlang:start_timer(?LOG_STATE_INTERVAL, self(), log_state),
-	{ok, #state{seeks=Seeks, seeks_by_player=SeeksByPlayer, seeks_by_id=SeeksById, parent=ParentPid, seed=now()}}.
+    {ok, #state{game_modules=GameMods, seeks=Seeks,
+                seeks_by_player=SeeksByPlayer, seeks_by_id=SeeksById,
+                parent=ParentPid, seed=now()}}.
 
 % @doc Deletes player and game tables upon termination.
 % Callback function for the OTP gen_fsm behavior.
@@ -98,25 +116,39 @@ terminate(_Reason, _Data) ->
 	ets:delete(toogie_player_priv_tbl),
 	ok.
 
+game_mod(GameType, GameMods) ->
+    case orddict:find(GameType, GameMods) of
+        error ->
+            undefined;
+        {ok, GameModVal} ->
+            GameModVal
+    end.
+
 % @doc The main 'loop' state of this FSM handles all messages 
 % (seeks, seek cancellations, player registrations ).
-handle_call({seek, #seek{pid=Pid, type=anon, variant=Var, board_size=BoardSize} = Seek}, 
-			_From, 
-			#state{seeks=Seeks, seeks_by_player=SeeksByPlayer, seeks_by_id=SeeksById, seed=Seed} = State) ->
+handle_call({seek, #seek{pid=Pid, game_privacy=anon, game_type=GameType} = Seek}, 
+            _From, 
+            #state{game_modules=GameMods, seeks=Seeks,
+                   seeks_by_player=SeeksByPlayer, seeks_by_id=SeeksById,
+                   seed=Seed} = State) ->
 	% Do not use issuer pid when looking up seeks
 	Key = Seek#seek{pid=none},
 	?log("Processing anonymous game seek ~w ~w ~w", [Seek, Key, State]),
 	% Match with currents seeks. Start game if matched, add to seeks if not
-	case dict:find(Key, Seeks) of
-		{ok, SeekId} ->
+    case {game_mod(GameType, GameMods), dict:find(Key, Seeks)} of
+        {undefined, _} ->
+            ?log("Invalid game type ~p", [GameType]),
+            {error, {invalid_game_type, GameType}};
+        {GameMod, {ok, SeekId}} ->
 			case dict:find(SeekId, SeeksById) of  
 				{ok, #seek{pid=Pid}} ->
 					?log("Seek ~w is a duplicate", [SeekId]),
 					{reply, {duplicate_seek, SeekId}, State}; 
 				{ok, #seek{pid=OPid}}  ->
 					?log("Seek has match. Starting new game", []),
-					{ok, GamePid} = toogie_game:start_link(#game_info{ppid1=OPid, ppid2=Pid, board_size=BoardSize, variant=Var, type=anon}),
-					toogie_player:joined(OPid, #game_info{pid=GamePid, id=SeekId, board_size=BoardSize, variant=Var, type=anon}, your_turn, 1),
+                    {ok, GamePid} = toogie_game:start_link(OPid, Pid, GameMod,
+                                                           Seek),
+					toogie_player:joined(OPid, #game_info{pid=GamePid, id=SeekId, game_privacy=anon, turn=your_turn, color=1}),
 					ets:insert(toogie_game_id_tbl, {SeekId, GamePid}),
 					ets:insert(toogie_game_pid_tbl, {GamePid, SeekId}),
 					toogie_player_master:unregister_player(OPid),
@@ -127,11 +159,11 @@ handle_call({seek, #seek{pid=Pid, type=anon, variant=Var, board_size=BoardSize} 
 					?log("State ~w", [NewState]),
 					{
 						reply,
-						{new_game, #game_info{pid=GamePid, id=SeekId, board_size=BoardSize, variant=Var, type=anon}, other_turn, 2}, 
+						{new_game, #game_info{pid=GamePid, id=SeekId, game_privacy=anon, turn=other_turn, color=2}}, 
 						NewState
 					}
 			end;
-		error ->
+		{_, error} ->
 			?log("No match. Seek -> Pending ", []),
 			{SeekId, Seed2} = next_game_id(Seed),
 			NewSeek = Seek#seek{id=SeekId},
@@ -144,7 +176,7 @@ handle_call({seek, #seek{pid=Pid, type=anon, variant=Var, board_size=BoardSize} 
 			{reply, {seek_pending, SeekId}, NewState}
 	end;
 % Process play with friend request (private seek).
-handle_call({seek, #seek{type=priv} = Seek}, {Pid, _Tag} = _From, 
+handle_call({seek, #seek{game_privacy=priv} = Seek}, {Pid, _Tag} = _From, 
 			#state{seed=Seed,seeks=Seeks, seeks_by_player=SeeksByPlayer, seeks_by_id=SeeksById} = State) ->
 	?log("Adding new private game seek ~w", [Seek]),
 	% Removing all other pending seeks when requesting private game
@@ -155,38 +187,47 @@ handle_call({seek, #seek{type=priv} = Seek}, {Pid, _Tag} = _From,
 	{reply, 
 	 {seek_pending, SeekId}, 
 	 State#state{seed=Seed2, seeks=Seeks2, seeks_by_id=SeeksById2, seeks_by_player=SeeksByPlayer2}};
-handle_call({accept_seek, SeekId}, {Pid, _Tag}, #state{seeks_by_id=SeeksById, seeks=Seeks, seeks_by_player=SeeksByPlayer} = State) ->
+handle_call({accept_seek, SeekId}, {Pid, _Tag}, #state{game_modules=GameMods,
+                                             seeks_by_id=SeeksById, seeks=Seeks, seeks_by_player=SeeksByPlayer} = State) ->
 	?log("Processing accept seek ~w", [SeekId]),
 	case dict:find(SeekId, SeeksById) of
-		{ok, #seek{pid=OPid, board_size=BoardSize, variant=Var}} -> 
+		{ok, #seek{pid=OPid, game_type=Type, seek_str=SeekStr} = Seek} -> 
 			?log("Seek has match. Starting new game", []),
-			{ok, GamePid} = toogie_game:start_link(#game_info{ppid1=OPid, ppid2=Pid, board_size=BoardSize, variant=Var, type=anon}),
-			GameId=SeekId,
-			toogie_player:joined(OPid, #game_info{pid=GamePid, id=GameId, board_size=BoardSize, variant=Var, type=anon}, your_turn, 1),
-			ets:insert(toogie_game_id_tbl, {GameId, GamePid}),
-			ets:insert(toogie_game_pid_tbl, {GamePid, GameId}),
-			% Stop bugging these two players with seek notifications
-			toogie_player_master:unregister_player(OPid),
-			toogie_player_master:unregister_player(Pid),
-			{_SeekIds, Seeks2, SeeksById2, SeeksByPlayer2} =
-				remove_player_seeks([Pid, OPid], Seeks, SeeksById, SeeksByPlayer),
-			NewState = State#state{seeks=Seeks2, seeks_by_player=SeeksByPlayer2, seeks_by_id=SeeksById2},
-			?log("State ~w", [NewState]),
-			{
-				reply,
-				{new_game, #game_info{pid=GamePid, id=GameId, board_size=BoardSize, variant=Var, type=anon}, other_turn, 2},
-				NewState
-			};
+            case game_mod(Type, GameMods) of
+                undefined ->
+                    {reply, invalid_command, State};
+                Mod ->
+                    {ok, GamePid} = toogie_game:start_link(OPid, Pid, Mod,  Seek),
+                    GameId=SeekId,
+                    GameInfo = #game_info{pid=GamePid,
+                                          id=GameId,
+                                          turn=your_turn,
+                                          color=1,
+                                          game_privacy=anon,
+                                          game_desc=SeekStr},
+                    toogie_player:joined(OPid, GameInfo),
+                    ets:insert(toogie_game_id_tbl, {GameId, GamePid}),
+                    ets:insert(toogie_game_pid_tbl, {GamePid, GameId}),
+                    % Stop bugging these two players with seek notifications
+                    toogie_player_master:unregister_player(OPid),
+                    toogie_player_master:unregister_player(Pid),
+                    {_SeekIds, Seeks2, SeeksById2, SeeksByPlayer2} =
+                                                                     remove_player_seeks([Pid, OPid], Seeks, SeeksById, SeeksByPlayer),
+                    NewState = State#state{seeks=Seeks2, seeks_by_player=SeeksByPlayer2, seeks_by_id=SeeksById2},
+                    ?log("State ~w", [NewState]),
+                    {reply, {new_game, GameInfo#game_info{turn=other_turn, color=2}}, NewState}
+            end;
 		error ->
 			case ets:lookup(toogie_game_priv_tbl, SeekId) of
-				[{SeekId, #seek{pid=OPid, board_size=BoardSize, variant=Var} = Seek}] ->
+				[{SeekId, #seek{pid=OPid, game_type=Type} = Seek}] ->
 					?log("Seek matches private seek ~w. Starting new game", [Seek]),
 					ets:delete(toogie_game_priv_tbl, SeekId),
 					% @todo Change below when multiple private seeks are possible
 					ets:delete(toogie_player_priv_tbl, OPid),
-					{ok, GamePid} = toogie_game:start_link(#game_info{ppid1=OPid, ppid2=Pid, board_size=BoardSize, variant=Var, type=anon}),
+                    GameMod = game_mod(Type, GameMods),
+					{ok, GamePid} = toogie_game:start_link(OPid, Pid, GameMod, Seek),
 					GameId=SeekId,
-					toogie_player:joined(OPid, #game_info{pid=GamePid, id=GameId, board_size=BoardSize, variant=Var, type=anon}, your_turn, 1),
+					toogie_player:joined(OPid, #game_info{pid=GamePid, id=GameId,game_privacy=anon, turn=your_turn, color=1}),
 					ets:insert(toogie_game_id_tbl, {GameId, GamePid}),
 					ets:insert(toogie_game_pid_tbl, {GamePid, GameId}),
 					% Stop bugging these two players with seek notifications
@@ -198,7 +239,7 @@ handle_call({accept_seek, SeekId}, {Pid, _Tag}, #state{seeks_by_id=SeeksById, se
 					?log("State ~w", [NewState]),
 					{
 						reply,
-						{new_game, #game_info{pid=GamePid, id=GameId, board_size=BoardSize, variant=Var, type=anon}, other_turn, 2},
+                        {new_game, #game_info{pid=GamePid, id=GameId, game_privacy=anon, turn=other_turn, color=2}},
 						NewState
 					};
 				[] ->

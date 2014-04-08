@@ -1,0 +1,1 @@
+-record(board_size, {rows=7, cols=6}).

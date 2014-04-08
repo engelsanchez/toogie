@@ -1,5 +1,3 @@
-
-
 -ifndef(NOLOG).
 -define(log(Format, Args), error_logger:info_msg("~w:~w ~w : " ++ Format ++ "~n", [?MODULE, ?LINE, self()] ++ Args)).
 -else.
@@ -13,30 +11,26 @@ nolog(_Format, _Args) -> ok.
 -define(LOG_STATE_INTERVAL, 1 * 60 * 1000).
 -define(MAX_GAME_ID,1000000).
 -define(MAX_PLAYER_ID,1000000).
-% % Returns the piece value on the given row,column
--define(piece(Board, Row, Col),element(Col, element(Row, Board))).
--define(num_rows(Board), erlang:tuple_size(Board)).
--define(num_cols(Board), erlang:tuple_size(element(1, Board))).
 
 %%%%%%%%%%%%
 % Common types
--type game_var() :: std | pop.
-%% Game Variant
--type game_state() :: playing | disconnected.
--type game_type() :: anon | priv.
+% TODO: Move to modules
+-type game_privacy() :: anon | priv.
+% 2 character game type
+-type game_type() :: <<_:16>>.
 -type turn() :: your_turn | other_turn.
 -type seek_id() :: pos_integer().
 -type game_id() :: pos_integer().
--type board() :: tuple().
-
--record(board_size, {rows=7, cols=6}).
 
 -record(game_info,{
 		id :: pos_integer(),
 		pid = none :: pid() | none, 
-		type :: game_type(), 
-		variant :: game_var(), 
-		board_size :: #board_size{},
+        game_privacy :: game_privacy(),
+		game_type :: game_type(), 
+        game_desc :: binary(), % Seek string
+        game_state,
+        turn,
+        color,
 		ppid1 = none :: none | pid(),
 		ppid2  = none :: none | pid()
 		}). 
@@ -44,18 +38,9 @@ nolog(_Format, _Args) -> ok.
 -record(seek, {
 		id = none :: none | pos_integer(),
 		pid = none :: none | pid(),
-		board_size :: #board_size{}, 
-		variant = std :: game_var(), 
-		type = anon :: game_type()
-		}).
-
--record(game_state, {
-		id = none :: game_id(),
-		variant :: game_var(),
-		board_size :: #board_size{},
-		board ::  new | tuple(),
-		turn :: turn(),
-		color :: 1|2
+        game_privacy :: game_privacy(),
+        game_type :: game_type(),
+        seek_str :: string()
 		}).
 
 -record(player_state, {

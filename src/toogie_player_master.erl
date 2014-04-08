@@ -1,11 +1,25 @@
 % @doc Handles the table of players registered to receive notifications
 -module(toogie_player_master).
 -behaviour(gen_server).
+
 % gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
+
 % Public API
--export([start/0, start_link/0, stop/0, connect/0, connect/1, register_player/1, 
-		 unregister_player/1, notify_seek_removed/2, notify_seek_issued/1,
+-export([start/0,
+         start_link/0,
+         stop/0,
+         connect/0,
+         connect/1,
+         register_player/1, 
+		 unregister_player/1,
+         notify_seek_removed/2,
+         notify_seek_issued/1,
 		 player_quit/1]).
 -include("toogie_common.hrl").
 -record(state, {parent}).
