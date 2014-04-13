@@ -17,34 +17,35 @@ new(SeekStr) ->
     Board = c4_board:new(BoardSpec),
     #c4_game_state{board=Board, game_var=GameVar}.
 
-play(Player, {drop, Col}, Board) ->
+play(Player, {drop, Col}, #c4_game_state{board=Board} = State) ->
 	?log("Player ~w played ~w~n", [Player, Col]),
 	case c4_board:add_piece(Board, Player, Col) of
 		{ok, NewBoard, Row} ->
 			?log("Board ~w~n", [NewBoard]),
+            NewState = State#c4_game_state{board=NewBoard},
 			case c4_board:check_win(NewBoard, Row, Col) of
 				true ->
-                    {win, NewBoard};
+                    {win, NewState};
 				false -> 
 					case c4_board:is_full(NewBoard) of
 						false ->
-                            {ok, NewBoard};
+                            {ok, NewState};
 						true ->
-                            {draw, NewBoard}
+                            {draw, NewState}
 					end
 			end;
 		invalid_move -> 
             invalid_move
 	end;
-play(Player, MoveStr, Board) ->
+play(Player, MoveStr, GameState) ->
     case parse_move(MoveStr) of
         invalid_move ->
             invalid_move;
         Move ->
-            play(Player, Move, Board)
+            play(Player, Move, GameState)
     end.
 
-state_string(Board) ->
+state_string(#c4_game_state{board=Board}) ->
     list_to_binary(io_lib:format("~w", [Board])).
 
 % @doc Reads board dimensions from text (07x06,08x07,etc).

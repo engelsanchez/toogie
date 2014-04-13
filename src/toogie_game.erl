@@ -27,7 +27,10 @@
 -type color() :: 1 | 2.
 
 % gen_server State data structure
--record(state, {game_module :: atom(),
+-record(state, {game_id :: integer(),
+                game_module :: atom(),
+                game_type :: binary(),
+                game_desc :: binary(),
                 game_state :: any(),
                 p1 :: pid(),
                 p1conn=false :: boolean(),
@@ -57,8 +60,8 @@ start_link(Pid1, Pid2, Mod, Seek = #seek{})
 % @doc Called when a player makes a move
 -spec(play(pid(), pid(), tuple()) ->
       invalid_move | not_your_turn | ok | you_win ).
-play(GamePid, PlayerPid, {drop, Col}) ->
-	gen_server:call(GamePid, {play, PlayerPid, {drop, Col}}, ?INTERNAL_TIMEOUT).
+play(GamePid, PlayerPid, Move) ->
+	gen_server:call(GamePid, {play, PlayerPid, Move}, ?INTERNAL_TIMEOUT).
 
 % @doc Returns information about the game relevant to the calling player
 game_state(GamePid, PlayerPid) ->
@@ -89,12 +92,17 @@ quit(GamePid, PlayerPid) ->
 % @doc Creates the empty board and starts monitoring the player processes.
 % FSM initialization callback.
 -spec(init(#game_info{}) -> {ok, playing, #state{}}).
-init([P1, P2, Mod, #seek{seek_str=SeekStr}]) when is_pid(P1), is_pid(P2)  ->
+init([P1, P2, Mod, #seek{id=GameId, seek_str=SeekStr, game_type=GameType}])
+        when is_pid(P1), is_pid(P2)  ->
 	?log("Starting~n", []),
 	monitor(process, P1),
 	monitor(process, P2),
     GameState = Mod:new(SeekStr),
-    {ok, #state{game_module=Mod, game_state=GameState,
+    {ok, #state{game_id=GameId,
+                game_module=Mod,
+                game_desc=SeekStr,
+                game_type=GameType,
+                game_state=GameState,
                 p1=P1, p1conn=true, color1=1,
                 p2=P2, p2conn=true, color2=2}}.
 
@@ -162,7 +170,9 @@ handle_call({reconnected, P2}, _From, #state{p1=P1, p2=P2, p2conn=false} = State
 handle_call({abandon}, _From, State) ->
 	{stop, normal, ok, State};
 handle_call({game_state, Pid}, _From, 
-			#state{game_module=Mod, game_state=GameState, p1=P1, p2=P2, color1=C1,color2=C2} = State)
+            #state{game_id=GameId, game_module=Mod, game_type=GameType,
+                   game_state=GameState, game_desc=GameDesc,
+                   p1=P1, p2=P2, color1=C1,color2=C2} = State)
 	when Pid =:= P1;Pid =:= P2 ->
     {Turn, Color} = if
         Pid =:= P1 -> {your_turn, C1};
@@ -171,6 +181,9 @@ handle_call({game_state, Pid}, _From,
     StateStr = Mod:state_string(GameState),
     {reply, #game_info{turn = Turn,
                        color = Color,
+                       id = GameId,
+                       game_desc = GameDesc,
+                       game_type = GameType,
                        game_state = StateStr}, State}; 
 handle_call(Msg, _From, State) ->
 	?log("Unexpected message ~w : ~w", [Msg, State]),

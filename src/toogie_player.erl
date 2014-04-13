@@ -76,7 +76,7 @@ i2b(I,Pad) ->
 % @doc Parses integer from binary string.
 -spec(b2i(binary()) -> integer()).
 b2i(B) ->
-    list_to_integer(binary_to_list(B)).
+    binary_to_integer(B).
 
 % @doc Translates turn atom to character (Y|O|W).
 turnc(Turn) ->
@@ -99,8 +99,8 @@ text_cmd(Pid, <<"CANCEL_SEEK">>) ->
 	toogie_player:cancel_seek(Pid);
 text_cmd(Pid, <<"CANCEL_SEEK ", SeekId:?ISIZE/binary>>) ->
 	toogie_player:cancel_seek(Pid, b2i(SeekId));
-text_cmd(Pid, <<"PLAY ", GameId:?ISIZE/binary, " DROP ", Col/binary>>) ->
-	toogie_player:play(Pid, b2i(GameId), {drop, b2i(Col)});
+text_cmd(Pid, <<"PLAY ", GameId:?ISIZE/binary, " ", Move/binary>>) ->
+	toogie_player:play(Pid, b2i(GameId), Move);
 text_cmd(Pid, <<"QUIT_GAME ", GameId:?ISIZE/binary>>) ->
 	toogie_player:quit_game(Pid, b2i(GameId));
 text_cmd(Pid, <<"QUIT">>) ->
@@ -200,7 +200,7 @@ accept_seek(Pid, SeekId) ->
 	gen_fsm:sync_send_event(Pid, {accept_seek, SeekId}, ?INTERNAL_TIMEOUT).
 
 % @doc Called when paired with another player for a game
--spec(joined(pid(), #game_info{}) -> {new_game, #game_info{}, turn(), 1|2}).
+-spec(joined(pid(), #game_info{}) -> {new_game, #game_info{}}).
 joined(Pid, GameInfo) ->
 	gen_fsm:sync_send_event(Pid, {new_game, GameInfo}, ?INTERNAL_TIMEOUT).
 
@@ -472,19 +472,19 @@ my_turn(Event, _From, State) ->
 % @doc Waiting for other player to move state.
 other_turn({other_played, GamePid, Move, your_turn}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
-	?log("Other player played  ~w", [Move]),
+	?log("Other player played  ~s", [Move]),
 	PPid ! {other_played, GameId, Move},
 	{reply, ok, my_turn, State};
 other_turn({other_played, GamePid, Move, game_draw}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
-	?log("Other player played and it's a draw ~w", [Move]),
+	?log("Other player played and it's a draw ~s", [Move]),
 	PPid ! {other_played_draw, GameId, Move},
 	SeekList = toogie_game_master:register_for_seeks(self()),
 	do_seek_issued(SeekList, PPid),
 	{reply, ok, idle, State#state{game_pid=none, game_id=none}};
 other_turn({other_played, GamePid, Move, you_lose}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
-	?log("Other player played ~w and wins", [Move]),
+	?log("Other player played ~s and wins", [Move]),
 	PPid ! {other_won, GameId, Move},
 	% @todo When multiple games are allowed, we will only notify when all games are finished.
 	SeekList = toogie_game_master:register_for_seeks(self()),
@@ -555,7 +555,7 @@ do_seek_removed(SeekId, ParentPid) ->
 	?log("Notifying ~w of removed seek ~w", [ParentPid, SeekId]),
 	ParentPid ! {seek_removed, SeekId}.
 
-do_seek(#seek{game_privacy=Privacy, seek_str=SeekStr} = Seek, State) ->
+do_seek(#seek{game_privacy=Privacy} = Seek, State) ->
 	?log("Player seek : ~w", [Seek]),
 	Reply = toogie_game_master:seek(Seek#seek{pid=self()}),
 	case Reply of
@@ -570,7 +570,7 @@ do_seek(#seek{game_privacy=Privacy, seek_str=SeekStr} = Seek, State) ->
 					priv -> State#state{disconnect_timeout=?DISCONNECT_TIMEOUT_PRIV_GAME}
 				end,
 			% We are not exposing every internal seek attribute on reply
-			ReplySeek = #seek{id=SeekId, seek_str=SeekStr},
+			ReplySeek = Seek#seek{id=SeekId},
 			{reply, {seek_pending, ReplySeek}, idle, NewState};
 		{duplicate_seek, SeekId} ->
 			?log("Silly player issuing the same seek again ~w", [Seek]),

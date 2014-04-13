@@ -44,7 +44,8 @@ start_link() ->
 	gen_server:start_link({local, toogie_game_master}, ?MODULE, self(), []).
 
 % @doc Call when a player requests to join a game. 
--spec(seek(#seek{}) -> {seek_pending, seek_id()} | {duplicate_seek, seek_id()} | {new_game, #game_info{}, turn(), 1|2 }).
+-spec(seek(#seek{}) -> {seek_pending, seek_id()} | {duplicate_seek, seek_id()}
+      | {new_game, #game_info{}}).
 seek(Seek) ->
 	gen_server:call(?MODULE, {seek, Seek}, ?INTERNAL_TIMEOUT).
 
@@ -144,7 +145,7 @@ handle_call({seek, #seek{pid=Pid, game_privacy=anon, game_type=GameType} = Seek}
 				{ok, #seek{pid=Pid}} ->
 					?log("Seek ~w is a duplicate", [SeekId]),
 					{reply, {duplicate_seek, SeekId}, State}; 
-				{ok, #seek{pid=OPid}}  ->
+				{ok, #seek{pid=OPid, game_type=GameType, seek_str=SeekStr}} ->
 					?log("Seek has match. Starting new game", []),
                     {ok, GamePid} = toogie_game:start_link(OPid, Pid, GameMod,
                                                            Seek),
@@ -159,7 +160,11 @@ handle_call({seek, #seek{pid=Pid, game_privacy=anon, game_type=GameType} = Seek}
 					?log("State ~w", [NewState]),
 					{
 						reply,
-						{new_game, #game_info{pid=GamePid, id=SeekId, game_privacy=anon, turn=other_turn, color=2}}, 
+                        {new_game, #game_info{pid=GamePid, id=SeekId,
+                                              game_type=GameType,
+                                              game_desc=SeekStr,
+                                              game_privacy=anon,
+                                              turn=other_turn, color=2}}, 
 						NewState
 					}
 			end;
@@ -203,6 +208,7 @@ handle_call({accept_seek, SeekId}, {Pid, _Tag}, #state{game_modules=GameMods,
                                           id=GameId,
                                           turn=your_turn,
                                           color=1,
+                                          game_type=Type,
                                           game_privacy=anon,
                                           game_desc=SeekStr},
                     toogie_player:joined(OPid, GameInfo),
@@ -219,7 +225,7 @@ handle_call({accept_seek, SeekId}, {Pid, _Tag}, #state{game_modules=GameMods,
             end;
 		error ->
 			case ets:lookup(toogie_game_priv_tbl, SeekId) of
-				[{SeekId, #seek{pid=OPid, game_type=Type} = Seek}] ->
+				[{SeekId, #seek{pid=OPid, game_type=Type, seek_str=SeekStr} = Seek}] ->
 					?log("Seek matches private seek ~w. Starting new game", [Seek]),
 					ets:delete(toogie_game_priv_tbl, SeekId),
 					% @todo Change below when multiple private seeks are possible
@@ -239,7 +245,11 @@ handle_call({accept_seek, SeekId}, {Pid, _Tag}, #state{game_modules=GameMods,
 					?log("State ~w", [NewState]),
 					{
 						reply,
-                        {new_game, #game_info{pid=GamePid, id=GameId, game_privacy=anon, turn=other_turn, color=2}},
+                        {new_game, #game_info{pid=GamePid, id=GameId,
+                                              game_type=Type,
+                                              game_desc=SeekStr,
+                                              game_privacy=anon,
+                                              turn=other_turn, color=2}},
 						NewState
 					};
 				[] ->
