@@ -1,20 +1,20 @@
-.PHONY: deps app clean doc
+.PHONY: deps compile clean doc
 PROJECT = erl-4inline
 
 DIALYZER = dialyzer
 REBAR = ./rebar
 
-all: app
+all: compile
 
 # Application.
 
 deps:
 	@$(REBAR) get-deps
 
-app: deps
+compile: deps
 	@$(REBAR) compile
 
-rel: app
+rel: compile
 	@$(REBAR) generate
 
 clean:
@@ -24,5 +24,5 @@ clean:
 doc:
 	@$(REBAR) doc
 
-tests: app
+test: compile
 	@$(REBAR) compile eunit skip_deps=true

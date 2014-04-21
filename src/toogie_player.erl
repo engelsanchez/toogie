@@ -139,8 +139,12 @@ text_reply({seek_pending, #seek{id=SeekId, game_privacy=Privacy,
                                 game_type=Type, seek_str=SeekStr}}) ->
     <<"SEEK_PENDING ", (privacy2txt(Privacy))/binary, " ", (i2b(SeekId))/binary,
       " ", Type/binary, " ", SeekStr/binary>>;
-text_reply({other_played, GameId, Move}) when is_integer(GameId) ->
-	<<"OTHER_PLAYED ", (i2b(GameId))/binary, " ", Move/binary>>;
+text_reply({other_played, GameId, Move, Turn}) when is_integer(GameId) ->
+    TurnString = case Turn of
+        other_turn -> <<" OTHER_TURN ">>;
+        your_turn -> <<" YOUR_TURN ">>
+    end,
+    <<"OTHER_PLAYED ", (i2b(GameId))/binary, TurnString/binary, Move/binary>>;
 text_reply({other_played_draw, GameId, Move}) when is_integer(GameId) ->
     <<"OTHER_DRAW ", (i2b(GameId))/binary, " ", Move/binary>>;
 text_reply({other_won, GameId, Move})  ->
@@ -442,7 +446,7 @@ idle(Event, _From, State) ->
 my_turn({play, GameId, Move},
         {ParentPid, _Tag} = From,
         #state{game_pid=GamePid, parent=ParentPid} = State) ->
-	?log("Player played game ~w  ~w", [GameId, Move]),
+	?log("Player played game ~w  ~s", [GameId, Move]),
 	case toogie_game:play(GamePid, self(), Move) of
 		invalid_move ->
             {reply, {error, invalid_move, <<"Invalid Move">>}, my_turn, State};
@@ -473,8 +477,13 @@ my_turn(Event, _From, State) ->
 other_turn({other_played, GamePid, Move, your_turn}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
 	?log("Other player played  ~s", [Move]),
-	PPid ! {other_played, GameId, Move},
+	PPid ! {other_played, GameId, Move, your_turn},
 	{reply, ok, my_turn, State};
+other_turn({other_played, GamePid, Move, other_turn}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
+  when is_pid(GamePid), is_pid(PPid) ->
+	?log("Other player played  ~s", [Move]),
+	PPid ! {other_played, GameId, Move, other_turn},
+	{reply, ok, other_turn, State};
 other_turn({other_played, GamePid, Move, game_draw}, _From, #state{game_pid=GamePid, game_id=GameId, parent=PPid} = State) 
   when is_pid(GamePid), is_pid(PPid) ->
 	?log("Other player played and it's a draw ~s", [Move]),
@@ -491,7 +500,7 @@ other_turn({other_played, GamePid, Move, you_lose}, _From, #state{game_pid=GameP
 	do_seek_issued(SeekList, PPid),
 	{reply, ok, idle, State#state{game_pid=none}};
 other_turn(Event, _From, State) ->
-	?log("Unexpected message while waiting for other player to move ~w ~w", [Event, State]),
+	?log("Unexpected message while waiting for other player to move ~p ~p", [Event, State]),
 	{reply, {error, bad_cmd, "Waiting for other player to move"}, other_turn, State}.
 
 % @doc Waiting for other player to reconnect.
@@ -500,7 +509,7 @@ waiting_for_reconnect({other_returned, GamePid}, _From,
 	if is_pid(PPid) -> PPid ! {other_returned, GameId}; true->ok end,
 	{reply, ok, PrevState, State};
 waiting_for_reconnect(Event, _From, State) ->
-	?log("Unexpected message while waiting for other player to reconnect ~w ~w", [Event, State]),
+	?log("Unexpected message while waiting for other player to reconnect ~p ~p", [Event, State]),
 	{reply, {error, bad_cmd, "Waiting for other player to reconnect"}, waiting_for_reconnect, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -522,7 +531,7 @@ do_disconnected(#state{game_pid=GamePid, disconnect_timeout=Timeout} = Data) ->
 		none -> ok;
 		_ -> toogie_game:disconnect(GamePid, self())
 	end,
-	?log("Setting timer to stop player process in ~w seconds", [Timeout/1000]),
+	?log("Setting timer to stop player process in ~p seconds", [Timeout/1000]),
 	TRef = erlang:start_timer(Timeout, self(), player_disconnected),
 	Data#state{parent=none, tref=TRef}.
 
@@ -537,7 +546,7 @@ do_seek_issued(_Seek, none) ->
 do_seek_issued(#seek{pid=SeekerId}, _ParentPid) when SeekerId =:= self() ->
 	ok;
 do_seek_issued(#seek{} = Seek, ParentPid) ->
-	?log("Sending seek issued notification to user : ~w ~w", [Seek, ParentPid]),
+	?log("Sending seek issued notification to user : ~p ~p", [Seek, ParentPid]),
 	ParentPid ! {seek_issued, Seek};
 do_seek_issued([], _ParentPid) ->
 	ok;
@@ -552,11 +561,11 @@ do_seek_removed([SeekId | MoreSeeks], ParentId) ->
 do_seek_removed([], _ParentId) ->
 	ok;
 do_seek_removed(SeekId, ParentPid) ->
-	?log("Notifying ~w of removed seek ~w", [ParentPid, SeekId]),
+	?log("Notifying ~p of removed seek ~p", [ParentPid, SeekId]),
 	ParentPid ! {seek_removed, SeekId}.
 
 do_seek(#seek{game_privacy=Privacy} = Seek, State) ->
-	?log("Player seek : ~w", [Seek]),
+	?log("Player seek : ~p", [Seek]),
 	Reply = toogie_game_master:seek(Seek#seek{pid=self()}),
 	case Reply of
 		{new_game, #game_info{} = GameInfo} ->
@@ -573,7 +582,7 @@ do_seek(#seek{game_privacy=Privacy} = Seek, State) ->
 			ReplySeek = Seek#seek{id=SeekId},
 			{reply, {seek_pending, ReplySeek}, idle, NewState};
 		{duplicate_seek, SeekId} ->
-			?log("Silly player issuing the same seek again ~w", [Seek]),
+			?log("Silly player issuing the same seek again ~p", [Seek]),
 			{reply, {duplicate_seek, SeekId}, idle, State}
 	end.
 
@@ -596,12 +605,12 @@ i2b_test() ->
 % @doc Asserts reception of a seek notification and returns the Seek id.
 -spec(expect_seek(#seek{}) -> pos_integer()).
 expect_seek(#seek{id=InSeekId, seek_str=SeekStr, game_privacy=Privacy} = Seek) ->
-	?debugFmt("Expecting seek message : ~w", [Seek]),
+	?debugFmt("Expecting seek message : ~p", [Seek]),
 	receive
         {seek_issued, #seek{id=SeekId,
                             seek_str=SeekStr,
                             game_privacy=Privacy}} = Msg1 ->
-			?debugFmt("Received ~w", [Msg1]),
+			?debugFmt("Received ~p", [Msg1]),
 			case InSeekId of
 				none -> ok;
 				_ -> ?assertEqual(InSeekId, SeekId)
@@ -613,10 +622,10 @@ expect_seek(#seek{id=InSeekId, seek_str=SeekStr, game_privacy=Privacy} = Seek) -
 
 % @doc Asserts reception of a new game notification.
 expect_game(GameInfo, Turn, Color) ->
-	?debugFmt("Expecting new game message ~w ~w ~w", [GameInfo, Turn, Color]),
+	?debugFmt("Expecting new game message ~p ~p ~p", [GameInfo, Turn, Color]),
 	receive
 		{new_game, GameInfo, Turn, Color} = Msg -> 
-			?debugFmt("Received ~w", [Msg]);
+			?debugFmt("Received ~p", [Msg]);
 		{new_game, _G2, _T2, _C2} = OMsg ->
 			?debugFmt("Received wrong message ~w", [OMsg]),
 			?assert(OMsg)

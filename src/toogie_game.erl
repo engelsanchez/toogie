@@ -25,6 +25,14 @@
          quit/2]).
 
 -type color() :: 1 | 2.
+-type seek_string() :: binary().
+
+% The toogie_game behaviour
+-callback new(seek_string()) -> term().
+-callback is_valid_seek(seek_string()) -> boolean().
+-callback state_string(term()) -> binary().
+-callback play(color(), binary(), term()) ->
+    invalid_move | {turn_change, term()} | {win, term()} | {draw, term()}.
 
 % gen_server State data structure
 -record(state, {game_id :: integer(),
@@ -121,6 +129,9 @@ handle_call({play, P1, Move}, _From, #state{game_module=Mod, p1=P1, p1conn=true,
         {win, NewGameState} ->
             toogie_player:other_played(P2, self(), Move, you_lose), 
             {stop, normal, you_win, State#state{game_state=NewGameState}};
+        {turn_change, NewGameState} ->
+            toogie_player:other_played(P2, self(), Move, your_turn),
+            {reply, ok, turn_change(State#state{game_state=NewGameState})};
         {ok, NewGameState} ->
             toogie_player:other_played(P2, self(), Move, your_turn),
             {reply, ok, turn_change(State#state{game_state=NewGameState})};
@@ -128,7 +139,7 @@ handle_call({play, P1, Move}, _From, #state{game_module=Mod, p1=P1, p1conn=true,
             toogie_player:other_played(P2, self(), Move, game_draw),
             State2 = turn_change(State#state{game_state=NewGameState}),
             {stop, normal, game_draw, State2}; 
-        invalid_move ->
+        {error, invalid_move} ->
 			{reply, invalid_move, State}
     end;
 % @doc One or both players have disconnected and moves are not allowed.

@@ -42,13 +42,13 @@ new(#board_size{rows=Nr, cols=Nc}) ->
 
 % @doc Drops a piece to the board down the given column, returning
 % {ok, NewBoard, Row} if ok
-% invalid_move if column full or bad column number
--spec(add_piece(board(), term(), pos_integer()) -> invalid_move | {ok, board(), pos_integer()}).
+% {error, invalid_move} if column full or bad column number
+-spec(add_piece(board(), term(), pos_integer()) -> {error, invalid_move} | {ok, board(), pos_integer()}).
 add_piece(Board, _Piece, Col) when Col =< 0; Col > ?num_cols(Board) ->
-	invalid_move;
+	{error, invalid_move};
 add_piece(Board, Piece, Col) ->
 	case free_row(Board, Col) of
-		full -> invalid_move;
+		full -> {error, invalid_move};
 		Row  -> {ok, set_piece(Board, Row, Col, Piece), Row}
 	end.
 
@@ -131,13 +131,13 @@ board_test_() ->
 
 add_piece_test() ->
 	B1 = c4_board:new(#board_size{rows=2,cols=2}),
-	?assertEqual(invalid_move, add_piece(B1, 1, 0)),
-	?assertEqual(invalid_move, add_piece(B1, 1, 3)),
+	?assertEqual({error, invalid_move}, add_piece(B1, 1, 0)),
+	?assertEqual({error, invalid_move}, add_piece(B1, 1, 3)),
 	?assertEqual({ok, {{1,0},{0,0}},1} , add_piece(B1, 1, 1)),
 	{ok, B2, 1} = add_piece(B1, 1, 1),
 	?assertEqual({ok, {{1,0},{1,0}}, 2}, add_piece(B2, 1, 1)),
 	{ok, B3, 2} = add_piece(B2, 1, 1),
-	?assertEqual(invalid_move, add_piece(B3, 1, 1)),
+	?assertEqual({error, invalid_move}, add_piece(B3, 1, 1)),
 	?assertEqual({ok, {{0,1,0},{0,0,0},{0,0,0}},1} , add_piece(new(#board_size{rows=3,cols=3}), 1, 2)).
 
 set_piece_test_() ->

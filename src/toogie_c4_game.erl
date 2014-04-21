@@ -1,5 +1,6 @@
 % @doc Handles 4-inline game commands and seeks.
 -module(toogie_c4_game).
+-behaviour(toogie_game).
 -export([new/1,
          play/3,
          state_string/1,
@@ -29,13 +30,13 @@ play(Player, {drop, Col}, #c4_game_state{board=Board} = State) ->
 				false -> 
 					case c4_board:is_full(NewBoard) of
 						false ->
-                            {ok, NewState};
+                            {turn_change, NewState};
 						true ->
                             {draw, NewState}
 					end
 			end;
-		invalid_move -> 
-            invalid_move
+		{error, Err} -> 
+            {error, Err}
 	end;
 play(Player, MoveStr, GameState) ->
     case parse_move(MoveStr) of

@@ -15,6 +15,7 @@
   {mod, { toogie_app, []}},
   {env, [
       {game_modules, [{<<"C4">>, toogie_c4_game},
+          {<<"CK">>, toogie_checkers_game},
           {<<"TS">>, toogie_test_game}
           ]}
       ]}
