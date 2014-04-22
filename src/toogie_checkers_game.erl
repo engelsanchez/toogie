@@ -61,7 +61,8 @@ do_play(Player, Move, State=#checkers_state{board=Board})
         when is_list(Move) ->
     case toogie_checkers_board:play(Player, Move, Board) of
         {ok, NewBoard} ->
-            ?log("Played ~p : ~p\n", [Move, NewBoard]),
+            ?log("Played ~p :\n~s\n",
+                 [Move, toogie_checkers_board:to_str(NewBoard)]),
             {ok, State#checkers_state{board=NewBoard}};
         {error, _} ->
             {error, invalid_move}
