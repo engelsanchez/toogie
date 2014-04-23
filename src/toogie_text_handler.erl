@@ -40,7 +40,7 @@ handle(Msg,
        #player_state{player_pid=Pid} = State)
         when is_pid(Pid) ->
 	?log("Received : ~s", [Msg]),
-    Reply = toogie_player:text_cmd(Pid, to_upper(Msg)),
+    Reply = toogie_player:text_cmd(Pid, Msg),
 	State2 = case Reply of
         ok_quit -> State#player_state{player_pid=undefined};
         _ -> State
@@ -51,5 +51,3 @@ handle(Msg, State) ->
     % TODO: reply with invalid command message maybe
 	{noreply, State}.
 
-to_upper(Bin) ->
-    << <<(if C >= $a,C=<$z -> C + $A-$a; true -> C end):8>> || <<C:8>> <= Bin >>.

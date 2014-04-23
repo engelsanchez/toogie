@@ -48,13 +48,17 @@ do_cmd(Cmd, State=#state{socket=Socket,
                          transport=Transport,
                          player_state=PlayerState}) ->
     ?log("Got ~p\n", [Cmd]),
-    case toogie_text_handler:handle(Cmd, PlayerState) of
+    case toogie_text_handler:handle(to_upper(Cmd), PlayerState) of
         {reply, Reply, NewPlayerState} ->
             Transport:send(Socket, <<Reply/binary, "\r\n">>),
             State#state{player_state=NewPlayerState};
         {noreply, NewPlayerState} ->
             State#state{player_state=NewPlayerState}
     end.
+
+-spec to_upper(binary()) -> binary().
+to_upper(Bin) ->
+    << <<(if C >= $a,C=<$z -> C + $A-$a; true -> C end):8>> || <<C:8>> <= Bin >>.
 
 do_cmds(Text, State) ->
     case binary:split(Text, [<<"\r">>, <<"\n">>, <<"\r\n">>]) of
